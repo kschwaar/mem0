@@ -27,6 +27,8 @@ from routers import api_keys as api_keys_router
 from routers import auth as auth_router
 from routers import entities as entities_router
 from routers import requests as requests_router
+from routers import v3 as v3_router
+from routers.mcp_server import setup_mcp_server
 from schemas import MessageResponse
 from server_state import (
     get_current_config,
@@ -42,7 +44,7 @@ from sqlalchemy import func, select
 load_dotenv()
 
 install_request_id_logging()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [%(request_id)s] %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - [%(request_id)s] %(message)s")
 
 MIN_KEY_LENGTH = 16
 SENSITIVE_CONFIG_KEYS = {
@@ -58,8 +60,8 @@ SENSITIVE_CONFIG_KEYS = {
 SKIPPED_REQUEST_LOG_PATHS = {"/api/health", "/docs", "/redoc", "/openapi.json"}
 SKIPPED_REQUEST_LOG_PREFIXES = ("/requests",)
 
-BUNDLED_LLM_PROVIDERS = ("openai", "anthropic", "gemini")
-BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini")
+BUNDLED_LLM_PROVIDERS = ("openai")
+BUNDLED_EMBEDDER_PROVIDERS = ("openai")
 
 
 def _warn_if_unconfigured() -> None:
@@ -104,36 +106,58 @@ elif not ADMIN_API_KEY:
 
 telemetry.log_status()
 
-POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "postgres")
-POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.environ.get("POSTGRES_DB", "postgres")
-POSTGRES_USER = os.environ.get("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
-POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories")
-
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://host.docker.internal:8080/v1")
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
 DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL", "gpt-4.1-nano-2025-04-14")
 DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL", "text-embedding-3-small")
+EMBEDDING_DIMS = int(os.environ.get("MEM0_EMBEDDING_DIMS", "1536"))
 
 DEFAULT_CONFIG = {
     "version": "v1.1",
     "vector_store": {
-        "provider": "pgvector",
+        "provider": "qdrant",
         "config": {
-            "host": POSTGRES_HOST,
-            "port": int(POSTGRES_PORT),
-            "dbname": POSTGRES_DB,
-            "user": POSTGRES_USER,
-            "password": POSTGRES_PASSWORD,
-            "collection_name": POSTGRES_COLLECTION_NAME,
+            "host": os.environ.get("QDRANT_HOST", "qdrant"),
+            "port": int(os.environ.get("QDRANT_PORT", "6333")),
+            "collection_name": os.environ.get("QDRANT_COLLECTION_NAME", "memories"),
+            "embedding_model_dims": EMBEDDING_DIMS,
+        },
+    },
+    "graph_store": {
+        "provider": "neo4j",
+        "config": {
+            "url": os.environ.get("NEO4J_URL", "bolt://neo4j-mem0:7687"),
+            "username": os.environ.get("NEO4J_USERNAME", "neo4j"),
+            "password": os.environ.get("NEO4J_PASSWORD", ""),
         },
     },
     "llm": {
         "provider": "openai",
-        "config": {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL},
+        "config": {
+            "api_key": OPENAI_API_KEY or "local",
+            "openai_base_url": OPENAI_BASE_URL,
+            "temperature": 0.2,
+            "model": DEFAULT_LLM_MODEL,
+        },
     },
-    "embedder": {"provider": "openai", "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL}},
+    "embedder": {
+        "provider": "openai",
+        "config": {
+            "api_key": OPENAI_API_KEY or "local",
+            "openai_base_url": OPENAI_BASE_URL,
+            "model": DEFAULT_EMBEDDER_MODEL,
+            "embedding_dims": EMBEDDING_DIMS,
+        },
+    },
+    "reranker": {
+        "provider": "huggingface",
+        "config": {
+            "model": "BAAI/bge-reranker-base",
+            "top_k": 10,
+            "device": "cpu",
+        },
+    },
     "history_db_path": HISTORY_DB_PATH,
 }
 
@@ -169,6 +193,8 @@ app.include_router(auth_router.router)
 app.include_router(api_keys_router.router)
 app.include_router(entities_router.router)
 app.include_router(requests_router.router)
+app.include_router(v3_router.router)
+setup_mcp_server(app)
 
 
 class Message(BaseModel):
@@ -403,7 +429,7 @@ def _serialize_memory(row: Any) -> Dict[str, Any]:
 
 def _list_all_memories(limit: int = ALL_MEMORIES_LIMIT) -> Dict[str, Any]:
     results = get_memory_instance().vector_store.list(top_k=limit)
-    rows = results[0] if results and isinstance(results, list) and isinstance(results[0], list) else results or []
+    rows = results[0] if results and isinstance(results, (list, tuple)) and isinstance(results[0], list) else results or []
     return {"results": [_serialize_memory(row) for row in rows]}
 
 

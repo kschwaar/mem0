@@ -922,10 +922,12 @@ class Memory(MemoryBase):
                 extracted_memories = []
             else:
                 try:
-                    extracted_memories = json.loads(response, strict=False).get("memory", [])
+                    parsed = json.loads(response, strict=False)
+                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
                 except json.JSONDecodeError:
                     extracted_json = extract_json(response)
-                    extracted_memories = json.loads(extracted_json, strict=False).get("memory", [])
+                    parsed = json.loads(extracted_json, strict=False)
+                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
         except Exception as e:
             logger.error(f"Error parsing extraction response: {e}")
             extracted_memories = []
@@ -936,7 +938,8 @@ class Memory(MemoryBase):
             return []
 
         # Phase 3: Batch embed all extracted memory texts
-        mem_texts = [m.get("text", "") for m in extracted_memories if m.get("text")]
+        extracted_memories = [m for m in extracted_memories if isinstance(m, dict) and m.get("text")]
+        mem_texts = [m.get("text", "") for m in extracted_memories]
         try:
             mem_embeddings_list = self.embedding_model.embed_batch(mem_texts, "add")
             embed_map = dict(zip(mem_texts, mem_embeddings_list))
@@ -2546,10 +2549,12 @@ class AsyncMemory(MemoryBase):
                 extracted_memories = []
             else:
                 try:
-                    extracted_memories = json.loads(response, strict=False).get("memory", [])
+                    parsed = json.loads(response, strict=False)
+                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
                 except json.JSONDecodeError:
                     extracted_json = extract_json(response)
-                    extracted_memories = json.loads(extracted_json, strict=False).get("memory", [])
+                    parsed = json.loads(extracted_json, strict=False)
+                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
         except Exception as e:
             logger.error(f"Error parsing extraction response (async): {e}")
             extracted_memories = []
@@ -2559,7 +2564,8 @@ class AsyncMemory(MemoryBase):
             return []
 
         # Phase 3: Batch embed all extracted memory texts
-        mem_texts = [m.get("text", "") for m in extracted_memories if m.get("text")]
+        extracted_memories = [m for m in extracted_memories if isinstance(m, dict) and m.get("text")]
+        mem_texts = [m.get("text", "") for m in extracted_memories]
         try:
             mem_embeddings_list = await asyncio.to_thread(self.embedding_model.embed_batch, mem_texts, "add")
             embed_map = dict(zip(mem_texts, mem_embeddings_list))

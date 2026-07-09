@@ -147,10 +147,17 @@ async def verify_auth(
     x_api_key: str | None = Depends(api_key_header),
     db: Session = Depends(get_db),
 ) -> User | None:
-    """Authenticate via JWT, X-API-Key, or legacy ADMIN_API_KEY. Returns User or None."""
+    """Authenticate via JWT, X-API-Key, 'Authorization: Token <key>' (the Platform
+    API's own scheme, sent by the mem0ai SDK and the plugin's hook scripts --
+    treated identically to X-API-Key), or legacy ADMIN_API_KEY. Returns User or None."""
     if credentials is not None:
         _mark_auth_type(request, "bearer")
         return _resolve_user_from_jwt(credentials.credentials, db)
+
+    if x_api_key is None:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.lower().startswith("token "):
+            x_api_key = auth_header[len("Token ") :].strip()
 
     if x_api_key is not None:
         if ADMIN_API_KEY and secrets.compare_digest(x_api_key, ADMIN_API_KEY):

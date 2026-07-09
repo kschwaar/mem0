@@ -2,10 +2,10 @@
 
 OUTPUT ?= text
 API_URL ?= http://localhost:8888
-DASHBOARD_URL ?= http://localhost:3000
+DASHBOARD_URL ?= http://localhost:3333
 
 up:
-	@for port in 3000 8888; do \
+	@for port in 3333 8888 6333 7688 7475; do \
 		if lsof -iTCP:$$port -sTCP:LISTEN >/dev/null 2>&1; then \
 			echo "error: port $$port is already in use."; \
 			echo "find the owning process with: lsof -iTCP:$$port -sTCP:LISTEN"; \
@@ -46,6 +46,8 @@ health:
 	@echo "API:       $$(curl -s -o /dev/null -w '%{http_code}' "$(API_URL)/docs")"
 	@echo "Dashboard: $$(curl -s -o /dev/null -w '%{http_code}' "$(DASHBOARD_URL)/api/health")"
 	@echo "Postgres:  $$(docker compose exec -T postgres pg_isready -q && echo 'ok' || echo 'down')"
+	@echo "Qdrant:    $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:6333/healthz)"
+	@echo "Neo4j:     $$(docker compose exec -T neo4j-mem0 neo4j status 2>/dev/null | grep -q running && echo 'ok' || echo 'down')"
 
 reset-admin-password:
 	@test -n "$(EMAIL)" || (echo "usage: make reset-admin-password EMAIL=<email> PASSWORD=<password>" && exit 2)

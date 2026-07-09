@@ -13,8 +13,13 @@ router = APIRouter(prefix="/entities", tags=["entities"])
 
 SCAN_LIMIT = 10_000
 
-EntityType = Literal["user", "agent", "run"]
-TYPE_TO_FIELD: dict[EntityType, str] = {"user": "user_id", "agent": "agent_id", "run": "run_id"}
+EntityType = Literal["user", "agent", "run", "project"]
+TYPE_TO_FIELD: dict[EntityType, str] = {
+    "user": "user_id",
+    "agent": "agent_id",
+    "run": "run_id",
+    "project": "app_id",
+}
 
 
 class Entity(BaseModel):
@@ -27,7 +32,7 @@ class Entity(BaseModel):
 
 def _iter_payloads() -> list[dict[str, Any]]:
     results = get_memory_instance().vector_store.list(top_k=SCAN_LIMIT)
-    rows = results[0] if results and isinstance(results, list) and isinstance(results[0], list) else results or []
+    rows = results[0] if results and isinstance(results, (list, tuple)) and isinstance(results[0], list) else results or []
     return [getattr(row, "payload", None) or {} for row in rows]
 
 

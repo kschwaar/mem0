@@ -16,7 +16,8 @@ COPY pyproject.toml .
 COPY poetry.lock .
 COPY README.md .
 COPY mem0 ./mem0
-RUN pip install -e .[graph]
+RUN pip install -e .[nlp]
+RUN python -m spacy download en_core_web_sm
 
 # Return to app directory and copy server code
 WORKDIR /app

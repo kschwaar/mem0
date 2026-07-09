@@ -184,6 +184,12 @@ def _release_lock() -> None:
 # Entry point                                                                  #
 # --------------------------------------------------------------------------- #
 def main() -> None:
+    base_url = os.environ.get("MEM0_BASE_URL", "https://api.mem0.ai").rstrip("/")
+    if base_url != "https://api.mem0.ai":
+        log.debug("MEM0_BASE_URL points at a self-hosted server (%s); "
+                   "custom categories are a Platform-only feature, skipping", base_url)
+        return
+
     api_key = resolve_api_key()
     if not api_key:
         log.debug("MEM0_API_KEY not set, skipping coding-categories setup")

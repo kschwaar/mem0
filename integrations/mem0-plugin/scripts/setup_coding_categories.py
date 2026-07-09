@@ -175,6 +175,16 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    base_url = os.environ.get("MEM0_BASE_URL", "https://api.mem0.ai").rstrip("/")
+    if base_url != "https://api.mem0.ai":
+        print(
+            f"MEM0_BASE_URL is set to {base_url} (a self-hosted server). Custom "
+            "categories (client.project.update) are a Platform-only feature with "
+            "no self-hosted equivalent -- nothing to do here.",
+            file=sys.stderr,
+        )
+        return 0
+
     api_key = resolve_api_key()
     if not api_key:
         print("ERROR: MEM0_API_KEY is not set. Export it or configure it via plugin userConfig.", file=sys.stderr)
