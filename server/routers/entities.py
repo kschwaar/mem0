@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 
 from auth import require_admin, verify_auth
+from compat import iter_rows_from_vector_store
 from errors import upstream_error
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -13,8 +14,8 @@ router = APIRouter(prefix="/entities", tags=["entities"])
 
 SCAN_LIMIT = 10_000
 
-EntityType = Literal["user", "agent", "run"]
-TYPE_TO_FIELD: dict[EntityType, str] = {"user": "user_id", "agent": "agent_id", "run": "run_id"}
+EntityType = Literal["user", "agent", "app", "run"]
+TYPE_TO_FIELD: dict[EntityType, str] = {"user": "user_id", "agent": "agent_id", "app": "app_id", "run": "run_id"}
 
 
 class Entity(BaseModel):
@@ -52,6 +53,9 @@ def list_entities(_auth=Depends(verify_auth)):
 
         for entity_type, field in TYPE_TO_FIELD.items():
             value = payload.get(field)
+            if value is None and field == "app_id":
+                metadata = payload.get("metadata")
+                value = metadata.get("app_id") if isinstance(metadata, dict) else None
             if not value:
                 continue
             bucket = buckets[(entity_type, str(value))]
@@ -70,7 +74,16 @@ def list_entities(_auth=Depends(verify_auth)):
 @router.delete("/{entity_type}/{entity_id}", response_model=MessageResponse)
 def delete_entity(entity_type: EntityType, entity_id: str, _auth=Depends(require_admin)):
     try:
-        get_memory_instance().delete_all(**{TYPE_TO_FIELD[entity_type]: entity_id})
+        if entity_type == "app":
+            memory = get_memory_instance()
+            for row in iter_rows_from_vector_store(memory, SCAN_LIMIT):
+                payload = getattr(row, "payload", None) or {}
+                metadata = payload.get("metadata")
+                app_id = payload.get("app_id") or (metadata.get("app_id") if isinstance(metadata, dict) else None)
+                if app_id == entity_id and getattr(row, "id", None):
+                    memory.delete(memory_id=row.id)
+        else:
+            get_memory_instance().delete_all(**{TYPE_TO_FIELD[entity_type]: entity_id})
     except Exception:
         raise upstream_error()
     return MessageResponse(message="Entity deleted")

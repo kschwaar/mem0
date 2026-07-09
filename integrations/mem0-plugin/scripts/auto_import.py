@@ -22,6 +22,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _chunking import filter_and_truncate, split_by_headers
+from _api import api_url
 from _identity import resolve_api_key, resolve_user_id
 from _project import resolve_branch, resolve_project_id, save_project_mapping
 
@@ -41,7 +42,6 @@ if os.environ.get("MEM0_DEBUG"):
     except OSError:
         pass
 
-API_URL = "https://api.mem0.ai"
 MAX_FILE_SIZE = 100_000  # skip files over 100 KB
 TARGET_FILES = ["CLAUDE.md", "AGENTS.md", ".cursorrules", ".windsurfrules", "mem0.md"]
 HASH_STORE = os.path.expanduser("~/.mem0/file_hashes.json")
@@ -135,7 +135,7 @@ def already_imported(api_key: str, user_id: str, project_id: str, filename: str)
         "threshold": 0.0,
     }).encode()
     req = urllib.request.Request(
-        f"{API_URL}/v3/memories/search/",
+        api_url("/v3/memories/search/"),
         data=body,
         headers={"Content-Type": "application/json", "Authorization": f"Token {api_key}"},
         method="POST",
@@ -169,7 +169,7 @@ def _delete_stale_chunks(api_key: str, user_id: str, project_id: str, filename: 
         "threshold": 0.0,
     }).encode()
     req = urllib.request.Request(
-        f"{API_URL}/v3/memories/search/",
+        api_url("/v3/memories/search/"),
         data=body,
         headers={"Content-Type": "application/json", "Authorization": f"Token {api_key}"},
         method="POST",
@@ -196,7 +196,7 @@ def _delete_stale_chunks(api_key: str, user_id: str, project_id: str, filename: 
     for mid in ids_to_delete:
         try:
             del_req = urllib.request.Request(
-                f"{API_URL}/v1/memories/{mid}/",
+                api_url(f"/v1/memories/{mid}/"),
                 headers={"Authorization": f"Token {api_key}"},
                 method="DELETE",
             )
@@ -234,7 +234,7 @@ def post_memory(api_key: str, content: str, user_id: str, filename: str, project
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"{API_URL}/v3/memories/add/",
+        api_url("/v3/memories/add/"),
         data=data,
         headers={
             "Content-Type": "application/json",

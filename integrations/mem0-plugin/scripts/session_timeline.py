@@ -17,11 +17,11 @@ import sys
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _api import api_url
 from _formatting import TYPE_ICONS, format_age
 from _identity import resolve_api_key, resolve_user_id
 from _project import resolve_project_id
 
-API_URL = "https://api.mem0.ai"
 MAX_RECENT = 10
 MAX_SUMMARIES = 3
 FETCH_TIMEOUT = 5
@@ -38,7 +38,7 @@ def fetch_recent_memories(api_key: str, user_id: str, project_id: str) -> list[d
 
     body = json.dumps({"filters": filters}).encode()
     req = urllib.request.Request(
-        f"{API_URL}/v3/memories/?page=1&page_size={MAX_RECENT}",
+        api_url(f"/v3/memories/?page=1&page_size={MAX_RECENT}"),
         data=body,
         headers={
             "Authorization": f"Token {api_key}",

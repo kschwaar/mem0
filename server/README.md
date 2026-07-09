@@ -105,6 +105,36 @@ Wire the command into cron or a systemd timer in production. The `created_at` co
 - Dashboard: `http://localhost:3000`
 - API: `http://localhost:8888`
 - OpenAPI docs: `http://localhost:8888/docs`
+- MCP endpoint: `http://localhost:8888/mcp`
+
+## Local CLI and MCP Compatibility
+
+The self-hosted server exposes a Platform-compatible adapter for local tools:
+
+- CLI auth accepts `Authorization: Token <api-key>` in addition to `X-API-Key`.
+- CLI routes are available under `/v1/...` and `/v3/...`.
+- The MCP endpoint is available at `/mcp` with hosted-compatible tool names.
+- `app_id` is preserved as project scope for coding-agent integrations.
+
+Point the unchanged Node CLI at localhost:
+
+```bash
+MEM0_BASE_URL=http://localhost:8888 MEM0_API_KEY='<api-key>' mem0 status
+MEM0_BASE_URL=http://localhost:8888 MEM0_API_KEY='<api-key>' mem0 add 'I prefer local memory' --user-id local-test --app-id mem0-local
+MEM0_BASE_URL=http://localhost:8888 MEM0_API_KEY='<api-key>' mem0 search 'local memory' --user-id local-test --app-id mem0-local
+```
+
+Point `integrations/mem0-plugin` at localhost:
+
+```bash
+export MEM0_BASE_URL=http://localhost:8888
+export MEM0_MCP_URL=http://localhost:8888/mcp
+export MEM0_API_KEY='<api-key>'
+```
+
+Hosted Platform-only request fields such as `rerank`, `keyword_search`,
+`fields`, `categories`, `immutable`, and `source` are accepted for local
+compatibility. Fields without an OSS equivalent are treated as no-ops.
 
 ## Dashboard
 
@@ -112,7 +142,7 @@ Once logged in, the dashboard exposes:
 
 - **Requests** — live audit log of API calls (method, path, status, latency).
 - **Memories** — browse memories, filter by user ID.
-- **Entities** — list every `user_id`, `agent_id`, and `run_id` that owns memories, with counts. Delete an entity to cascade-delete its memories.
+- **Entities** — list every `user_id`, `agent_id`, `app_id`, and `run_id` that owns memories, with counts. Delete an entity to cascade-delete its memories.
 - **API Keys** — create, label, and revoke per-user keys.
 - **Configuration** — runtime LLM and embedder override. Changes persist to the app database and reapply on restart, layered over the values from your `.env`.
 - **Settings** — account profile and password.

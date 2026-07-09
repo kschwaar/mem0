@@ -19,6 +19,7 @@ from errors import (
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+from compat import RESERVED_PAYLOAD_KEYS, add_app_id_to_metadata, iter_rows_from_vector_store, serialize_memory
 from mem0.exceptions import ValidationError as Mem0ValidationError
 from models import RequestLog, User
 from pydantic import BaseModel, Field
@@ -26,6 +27,7 @@ from rate_limit import limiter
 from routers import api_keys as api_keys_router
 from routers import auth as auth_router
 from routers import entities as entities_router
+from routers import platform_compat as platform_compat_router
 from routers import requests as requests_router
 from schemas import MessageResponse
 from server_state import (
@@ -168,6 +170,7 @@ app.add_middleware(
 app.include_router(auth_router.router)
 app.include_router(api_keys_router.router)
 app.include_router(entities_router.router)
+app.include_router(platform_compat_router.router)
 app.include_router(requests_router.router)
 
 
@@ -180,6 +183,7 @@ class MemoryCreate(BaseModel):
     messages: List[Message] = Field(..., description="List of messages to store.")
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
+    app_id: Optional[str] = None
     run_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
     expiration_date: Optional[str] = Field(None, description="Expiration date in YYYY-MM-DD format.")
@@ -199,6 +203,7 @@ class SearchRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="Deprecated: pass inside `filters` instead.", deprecated=True)
     run_id: Optional[str] = Field(None, description="Deprecated: pass inside `filters` instead.", deprecated=True)
     agent_id: Optional[str] = Field(None, description="Deprecated: pass inside `filters` instead.", deprecated=True)
+    app_id: Optional[str] = Field(None, description="Deprecated: pass inside `filters` instead.", deprecated=True)
     filters: Optional[Dict[str, Any]] = None
     top_k: Optional[int] = Field(None, description="Maximum number of results to return.")
     threshold: Optional[float] = Field(None, description="Minimum similarity score for results.")
@@ -370,6 +375,7 @@ def add_memory(memory_create: MemoryCreate, _auth=Depends(verify_auth)):
         raise HTTPException(status_code=400, detail="At least one identifier (user_id, agent_id, run_id) is required.")
 
     params = {k: v for k, v in memory_create.model_dump().items() if v is not None and k != "messages"}
+    params = add_app_id_to_metadata(params)
     try:
         response = get_memory_instance().add(messages=[m.model_dump() for m in memory_create.messages], **params)
         if response.get("results"):
@@ -382,28 +388,15 @@ def add_memory(memory_create: MemoryCreate, _auth=Depends(verify_auth)):
 
 
 ALL_MEMORIES_LIMIT = 1000
-_RESERVED_PAYLOAD_KEYS = {"data", "user_id", "agent_id", "run_id", "hash", "created_at", "updated_at", "expiration_date"}
+_RESERVED_PAYLOAD_KEYS = RESERVED_PAYLOAD_KEYS
 
 
 def _serialize_memory(row: Any) -> Dict[str, Any]:
-    payload = getattr(row, "payload", None) or {}
-    return {
-        "id": getattr(row, "id", None),
-        "memory": payload.get("data"),
-        "user_id": payload.get("user_id"),
-        "agent_id": payload.get("agent_id"),
-        "run_id": payload.get("run_id"),
-        "hash": payload.get("hash"),
-        "expiration_date": payload.get("expiration_date"),
-        "metadata": {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS},
-        "created_at": payload.get("created_at"),
-        "updated_at": payload.get("updated_at"),
-    }
+    return serialize_memory(row)
 
 
 def _list_all_memories(limit: int = ALL_MEMORIES_LIMIT) -> Dict[str, Any]:
-    results = get_memory_instance().vector_store.list(top_k=limit)
-    rows = results[0] if results and isinstance(results, list) and isinstance(results[0], list) else results or []
+    rows = iter_rows_from_vector_store(get_memory_instance(), limit)
     return {"results": [_serialize_memory(row) for row in rows]}
 
 
@@ -413,13 +406,14 @@ def get_all_memories(
     user_id: Optional[str] = None,
     run_id: Optional[str] = None,
     agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
     top_k: Optional[int] = Query(None, ge=0, le=ALL_MEMORIES_LIMIT),
     show_expired: bool = Query(False),
     _auth=Depends(verify_auth),
 ):
     """Retrieve stored memories. Lists all memories when no identifier is provided (admin only)."""
     try:
-        if not any([user_id, run_id, agent_id]):
+        if not any([user_id, run_id, agent_id, app_id]):
             auth_type = getattr(request.state, "auth_type", "none")
             if _auth is not None and _auth.role != "admin" and auth_type not in {"admin_api_key", "disabled"}:
                 raise HTTPException(status_code=403, detail="Admin role required to list all memories.")
@@ -428,6 +422,8 @@ def get_all_memories(
         filters = {
             k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v
         }
+        if app_id:
+            filters["metadata"] = {"app_id": app_id}
         params = {"filters": filters}
         if top_k is not None:
             params["top_k"] = top_k
@@ -454,10 +450,13 @@ def search_memories(search_req: SearchRequest, _auth=Depends(verify_auth)):
     try:
         filters = search_req.filters or {}
         deprecated_keys = []
-        for entity_key in ("user_id", "agent_id", "run_id"):
+        for entity_key in ("user_id", "agent_id", "app_id", "run_id"):
             entity_val = getattr(search_req, entity_key, None)
             if entity_val:
-                filters[entity_key] = entity_val
+                if entity_key == "app_id":
+                    filters["metadata"] = {"app_id": entity_val}
+                else:
+                    filters[entity_key] = entity_val
                 deprecated_keys.append(entity_key)
         if deprecated_keys:
             logging.warning(
@@ -528,16 +527,25 @@ def delete_all_memories(
     user_id: Optional[str] = None,
     run_id: Optional[str] = None,
     agent_id: Optional[str] = None,
+    app_id: Optional[str] = None,
     _auth=Depends(require_admin),
 ):
     """Delete all memories for a given identifier. Requires admin role."""
-    if not any([user_id, run_id, agent_id]):
+    if not any([user_id, run_id, agent_id, app_id]):
         raise HTTPException(status_code=400, detail="At least one identifier is required.")
     try:
-        params = {
-            k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v
-        }
-        get_memory_instance().delete_all(**params)
+        if app_id:
+            filters = {k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v}
+            filters["metadata"] = {"app_id": app_id}
+            response = get_memory_instance().get_all(filters=filters, top_k=ALL_MEMORIES_LIMIT, show_expired=True)
+            for item in response.get("results", []):
+                if item.get("id"):
+                    get_memory_instance().delete(memory_id=item["id"])
+        else:
+            params = {
+                k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v
+            }
+            get_memory_instance().delete_all(**params)
         return MessageResponse(message="All relevant memories deleted")
     except Exception:
         raise upstream_error()
