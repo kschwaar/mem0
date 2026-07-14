@@ -95,7 +95,9 @@ def find_compact_summary(lines: list[str]) -> str:
     return ""
 
 
-def store_summary(api_key: str, summary: str, user_id: str, session_id: str, project_id: str = "", branch: str = "") -> bool:
+def store_summary(
+    api_key: str, summary: str, user_id: str, session_id: str, project_id: str = "", branch: str = ""
+) -> bool:
     expires = (date.today() + timedelta(days=COMPACT_SUMMARY_EXPIRY_DAYS)).isoformat()
     metadata = {
         "type": "compact_summary",

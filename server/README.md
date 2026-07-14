@@ -107,6 +107,30 @@ Wire the command into cron or a systemd timer in production. The `created_at` co
 - OpenAPI docs: `http://localhost:8888/docs`
 - MCP endpoint: `http://localhost:8888/mcp`
 
+## Local Memory Profile
+
+The default Docker Compose stack uses Postgres/pgvector. For a heavier local
+memory stack with Qdrant, Neo4j, and local HuggingFace reranking, opt into the
+`local-memory` profile and select the matching providers through env vars:
+
+```bash
+cd server
+MEM0_VECTOR_STORE_PROVIDER=qdrant \
+MEM0_GRAPH_STORE_PROVIDER=neo4j \
+MEM0_RERANKER_PROVIDER=huggingface \
+OPENAI_BASE_URL=http://host.docker.internal:8080/v1 \
+OPENAI_API_KEY=local \
+NEO4J_PASSWORD='local-neo4j-password' \
+docker compose --profile local-memory up --build
+```
+
+This starts Qdrant on `localhost:6333` and Neo4j on `localhost:7475`/`7688`.
+HuggingFace model files are cached in the `huggingface_cache` Docker volume.
+
+Neo4j is available to the profile as a backing service. Graph memory requires a
+Mem0 SDK build that supports `graph_store`; builds without that config support
+will ignore the graph settings while still using Qdrant and the reranker.
+
 ## Local CLI and MCP Compatibility
 
 The self-hosted server exposes a Platform-compatible adapter for local tools:

@@ -103,12 +103,13 @@ def extract_recent_exchanges(lines: list[str], max_exchanges: int = 3) -> list[d
     if not messages:
         return []
 
-    result = messages[-(max_exchanges * 2):]
+    result = messages[-(max_exchanges * 2) :]
     return result
 
 
-def store_exchange(api_key: str, messages: list[dict], user_id: str,
-                   project_id: str, branch: str, session_id: str) -> bool:
+def store_exchange(
+    api_key: str, messages: list[dict], user_id: str, project_id: str, branch: str, session_id: str
+) -> bool:
     metadata = {
         "type": "auto_capture",
         "source": "auto_capture",
@@ -141,8 +142,7 @@ def store_exchange(api_key: str, messages: list[dict], user_id: str,
         with urllib.request.urlopen(req, timeout=15) as resp:
             if resp.status in (200, 201):
                 result = json.loads(resp.read())
-                log.info("Auto-captured: event_id=%s status=%s",
-                         result.get("event_id", "?"), result.get("status", "?"))
+                log.info("Auto-captured: event_id=%s status=%s", result.get("event_id", "?"), result.get("status", "?"))
                 return True
             log.warning("API returned status %d", resp.status)
             return False
@@ -197,6 +197,7 @@ def main():
     if store_exchange(api_key, messages, user_id, project_id, branch, session_id):
         try:
             import session_stats
+
             session_stats.record_add("auto_capture")
         except Exception:
             pass

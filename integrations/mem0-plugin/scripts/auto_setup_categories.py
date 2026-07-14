@@ -71,10 +71,7 @@ def categories_fingerprint(categories: list = CODING_CATEGORIES) -> str:
     editing a category changes it (so the taxonomy re-applies on upgrade).
     """
     pairs = sorted(
-        (str(key), str(value))
-        for entry in categories
-        if isinstance(entry, dict)
-        for key, value in entry.items()
+        (str(key), str(value)) for entry in categories if isinstance(entry, dict) for key, value in entry.items()
     )
     payload = json.dumps(pairs, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -184,6 +181,14 @@ def _release_lock() -> None:
 # Entry point                                                                  #
 # --------------------------------------------------------------------------- #
 def main() -> None:
+    base_url = os.environ.get("MEM0_BASE_URL", "https://api.mem0.ai").rstrip("/")
+    if base_url != "https://api.mem0.ai":
+        log.debug(
+            "MEM0_BASE_URL points at a self-hosted server (%s); custom categories are a Platform-only feature, skipping",
+            base_url,
+        )
+        return
+
     api_key = resolve_api_key()
     if not api_key:
         log.debug("MEM0_API_KEY not set, skipping coding-categories setup")

@@ -60,6 +60,7 @@ def _acquire_lock() -> bool:
         try:
             mtime = os.path.getmtime(LOCK_FILE)
             import time
+
             if time.time() - mtime > 120:
                 os.unlink(LOCK_FILE)
                 return _acquire_lock()
@@ -78,10 +79,14 @@ def _release_lock() -> None:
 def _git_root(cwd: str) -> str:
     """Return the git repo root, or empty string if not in a repo."""
     import subprocess
+
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd, capture_output=True, text=True, timeout=5,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -122,18 +127,20 @@ def save_hashes(hashes: dict[str, str]) -> None:
 
 
 def already_imported(api_key: str, user_id: str, project_id: str, filename: str) -> bool:
-    body = json.dumps({
-        "query": filename,
-        "filters": {
-            "AND": [
-                {"user_id": user_id},
-                {"app_id": project_id},
-                {"metadata": {"source": "auto-import"}},
-            ]
-        },
-        "top_k": 10,
-        "threshold": 0.0,
-    }).encode()
+    body = json.dumps(
+        {
+            "query": filename,
+            "filters": {
+                "AND": [
+                    {"user_id": user_id},
+                    {"app_id": project_id},
+                    {"metadata": {"source": "auto-import"}},
+                ]
+            },
+            "top_k": 10,
+            "threshold": 0.0,
+        }
+    ).encode()
     req = urllib.request.Request(
         api_url("/v3/memories/search/"),
         data=body,
@@ -156,18 +163,20 @@ def already_imported(api_key: str, user_id: str, project_id: str, filename: str)
 
 def _delete_stale_chunks(api_key: str, user_id: str, project_id: str, filename: str) -> int:
     """Find and delete existing chunks for a file before re-import. Returns count deleted."""
-    body = json.dumps({
-        "query": filename,
-        "filters": {
-            "AND": [
-                {"user_id": user_id},
-                {"app_id": project_id},
-                {"metadata": {"source": "auto-import"}},
-            ]
-        },
-        "top_k": 20,
-        "threshold": 0.0,
-    }).encode()
+    body = json.dumps(
+        {
+            "query": filename,
+            "filters": {
+                "AND": [
+                    {"user_id": user_id},
+                    {"app_id": project_id},
+                    {"metadata": {"source": "auto-import"}},
+                ]
+            },
+            "top_k": 20,
+            "threshold": 0.0,
+        }
+    ).encode()
     req = urllib.request.Request(
         api_url("/v3/memories/search/"),
         data=body,
@@ -273,7 +282,14 @@ def main() -> None:
     if git_root and os.path.realpath(git_root) != os.path.realpath(cwd):
         search_dirs.append(git_root)
 
-    log.debug("Auto-import started: cwd=%s git_root=%s project=%s user=%s branch=%s", cwd, git_root or "(none)", project_id, user_id, branch)
+    log.debug(
+        "Auto-import started: cwd=%s git_root=%s project=%s user=%s branch=%s",
+        cwd,
+        git_root or "(none)",
+        project_id,
+        user_id,
+        branch,
+    )
 
     hashes = load_hashes()
     updated = False
@@ -347,7 +363,7 @@ def main() -> None:
 
         success = True
         for i, chunk in enumerate(chunks):
-            chunk_name = f"{filename}[{i+1}/{len(chunks)}]" if len(chunks) > 1 else filename
+            chunk_name = f"{filename}[{i + 1}/{len(chunks)}]" if len(chunks) > 1 else filename
             if not post_memory(api_key, chunk, user_id, chunk_name, project_id, branch):
                 success = False
 

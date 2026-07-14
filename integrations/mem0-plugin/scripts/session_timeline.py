@@ -76,7 +76,9 @@ def format_timeline(memories: list[dict]) -> str:
         lines.append(f"- {icon} [{cat}]{age_str} {text} [mem0:{mid}]")
 
     lines.append("")
-    lines.append("Search mem0 for details on any of these, or for past decisions and task learnings relevant to the current task.")
+    lines.append(
+        "Search mem0 for details on any of these, or for past decisions and task learnings relevant to the current task."
+    )
 
     return "\n".join(lines)
 

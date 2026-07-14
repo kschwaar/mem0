@@ -114,13 +114,28 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
 POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
 DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL", "gpt-4.1-nano-2025-04-14")
 DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL", "text-embedding-3-small")
+EMBEDDING_DIMS = int(os.environ.get("MEM0_EMBEDDING_DIMS", "1536"))
+VECTOR_STORE_PROVIDER = os.environ.get("MEM0_VECTOR_STORE_PROVIDER", "pgvector").lower()
+GRAPH_STORE_PROVIDER = os.environ.get("MEM0_GRAPH_STORE_PROVIDER", "").lower()
+RERANKER_PROVIDER = os.environ.get("MEM0_RERANKER_PROVIDER", "").lower()
 
-DEFAULT_CONFIG = {
-    "version": "v1.1",
-    "vector_store": {
+
+def _vector_store_config() -> dict[str, Any]:
+    if VECTOR_STORE_PROVIDER == "qdrant":
+        return {
+            "provider": "qdrant",
+            "config": {
+                "host": os.environ.get("QDRANT_HOST", "qdrant"),
+                "port": int(os.environ.get("QDRANT_PORT", "6333")),
+                "collection_name": os.environ.get("QDRANT_COLLECTION_NAME", "memories"),
+                "embedding_model_dims": EMBEDDING_DIMS,
+            },
+        }
+    return {
         "provider": "pgvector",
         "config": {
             "host": POSTGRES_HOST,
@@ -130,14 +145,55 @@ DEFAULT_CONFIG = {
             "password": POSTGRES_PASSWORD,
             "collection_name": POSTGRES_COLLECTION_NAME,
         },
-    },
+    }
+
+
+def _openai_provider_config() -> dict[str, Any]:
+    config = {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL}
+    if OPENAI_BASE_URL:
+        config["openai_base_url"] = OPENAI_BASE_URL
+    return config
+
+
+def _openai_embedder_config() -> dict[str, Any]:
+    config = {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL}
+    if OPENAI_BASE_URL:
+        config["openai_base_url"] = OPENAI_BASE_URL
+    if VECTOR_STORE_PROVIDER == "qdrant":
+        config["embedding_dims"] = EMBEDDING_DIMS
+    return config
+
+
+DEFAULT_CONFIG = {
+    "version": "v1.1",
+    "vector_store": _vector_store_config(),
     "llm": {
         "provider": "openai",
-        "config": {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL},
+        "config": _openai_provider_config(),
     },
-    "embedder": {"provider": "openai", "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL}},
+    "embedder": {"provider": "openai", "config": _openai_embedder_config()},
     "history_db_path": HISTORY_DB_PATH,
 }
+
+if RERANKER_PROVIDER == "huggingface":
+    DEFAULT_CONFIG["reranker"] = {
+        "provider": "huggingface",
+        "config": {
+            "model": os.environ.get("MEM0_HUGGINGFACE_RERANKER_MODEL", "BAAI/bge-reranker-base"),
+            "top_k": int(os.environ.get("MEM0_RERANKER_TOP_K", "10")),
+            "device": os.environ.get("MEM0_RERANKER_DEVICE", "cpu"),
+        },
+    }
+
+if GRAPH_STORE_PROVIDER == "neo4j":
+    DEFAULT_CONFIG["graph_store"] = {
+        "provider": "neo4j",
+        "config": {
+            "url": os.environ.get("NEO4J_URL", "bolt://neo4j-mem0:7687"),
+            "username": os.environ.get("NEO4J_USERNAME", "neo4j"),
+            "password": os.environ.get("NEO4J_PASSWORD", ""),
+        },
+    }
 
 
 set_session_factory(SessionLocal)
@@ -419,9 +475,7 @@ def get_all_memories(
                 raise HTTPException(status_code=403, detail="Admin role required to list all memories.")
             # Admin all-memory listing is intentionally raw; scoped get_all below applies expiry visibility.
             return _list_all_memories(limit=top_k if top_k is not None else ALL_MEMORIES_LIMIT)
-        filters = {
-            k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v
-        }
+        filters = {k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v}
         if app_id:
             filters["metadata"] = {"app_id": app_id}
         params = {"filters": filters}
@@ -489,7 +543,7 @@ def update_memory(memory_id: str, updated_memory: MemoryUpdate, _auth=Depends(ve
         fields_set = getattr(updated_memory, "model_fields_set", getattr(updated_memory, "__fields_set__", set()))
         params = {"memory_id": memory_id}
         if "text" in fields_set:
-            params["data"] = updated_memory.text
+            params["text"] = updated_memory.text
         if "metadata" in fields_set:
             params["metadata"] = updated_memory.metadata
         if "expiration_date" in fields_set:
@@ -542,9 +596,7 @@ def delete_all_memories(
                 if item.get("id"):
                     get_memory_instance().delete(memory_id=item["id"])
         else:
-            params = {
-                k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v
-            }
+            params = {k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v}
             get_memory_instance().delete_all(**params)
         return MessageResponse(message="All relevant memories deleted")
     except Exception:

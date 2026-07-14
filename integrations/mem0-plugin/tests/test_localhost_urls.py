@@ -45,3 +45,27 @@ def test_mcp_templates_reference_mem0_mcp_url():
     root = Path(__file__).resolve().parents[1]
     for rel in [".codex-mcp.json", ".cursor-mcp.json", ".mcp.json", "mcp_config.json"]:
         assert "MEM0_MCP_URL" in (root / rel).read_text()
+
+
+def test_setup_categories_skips_self_hosted_server(monkeypatch, capsys):
+    from setup_coding_categories import main
+
+    monkeypatch.setenv("MEM0_BASE_URL", "http://localhost:8888")
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    monkeypatch.setattr("sys.argv", ["setup_coding_categories.py"])
+
+    assert main() == 0
+    assert "Platform-only feature" in capsys.readouterr().err
+
+
+def test_auto_setup_categories_skips_self_hosted_server(monkeypatch):
+    import auto_setup_categories
+
+    monkeypatch.setenv("MEM0_BASE_URL", "http://localhost:8888")
+    monkeypatch.setattr(
+        auto_setup_categories,
+        "resolve_api_key",
+        lambda: (_ for _ in ()).throw(AssertionError("resolve_api_key should not be called")),
+    )
+
+    auto_setup_categories.main()

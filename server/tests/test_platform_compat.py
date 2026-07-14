@@ -31,7 +31,7 @@ class FakeMemory:
 
     def update(self, **params):
         self.updated.append(params)
-        return {"id": params["memory_id"], "memory": params.get("data")}
+        return {"id": params["memory_id"], "memory": params.get("text", params.get("data"))}
 
     def history(self, memory_id):
         return {"results": [{"memory_id": memory_id}]}
@@ -51,6 +51,8 @@ def make_client(monkeypatch):
 
     fake = FakeMemory()
     app = FastAPI()
+    monkeypatch.setattr(platform_compat, "mcp", None)
+    monkeypatch.setattr(platform_compat, "StreamableHTTPServerTransport", None)
     app.include_router(platform_compat.router)
     app.dependency_overrides[verify_auth] = lambda: SimpleNamespace(email="local@example.com", role="admin")
 
@@ -106,7 +108,7 @@ def test_v1_aliases_get_update_delete(monkeypatch):
     assert client.get("/v1/memories/mem-1/?source=CLI").json()["id"] == "mem-1"
     assert client.put("/v1/memories/mem-1/", json={"text": "updated"}).json()["memory"] == "updated"
     assert client.delete("/v1/memories/mem-1/?source=CLI").status_code == 200
-    assert fake.updated[0] == {"memory_id": "mem-1", "data": "updated"}
+    assert fake.updated[0] == {"memory_id": "mem-1", "text": "updated"}
     assert fake.deleted == ["mem-1"]
 
 
@@ -147,6 +149,27 @@ def test_mcp_add_memory_accepts_text_argument(monkeypatch):
     assert response.status_code == 200
     assert "result" in response.json()
     assert fake.add_calls[0]["messages"] == [{"role": "user", "content": "remember this"}]
+
+
+def test_mcp_add_memory_uses_header_identity_defaults(monkeypatch):
+    client, fake = make_client(monkeypatch)
+
+    response = client.post(
+        "/mcp/",
+        headers={"X-User-ID": "u1", "X-Agent-ID": "agent-local", "X-App-ID": "proj"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "add_memory", "arguments": {"text": "remember via headers"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert "result" in response.json()
+    assert fake.add_calls[0]["user_id"] == "u1"
+    assert fake.add_calls[0]["agent_id"] == "agent-local"
+    assert fake.add_calls[0]["metadata"]["app_id"] == "proj"
 
 
 def test_token_auth_uses_api_key_resolver(monkeypatch):

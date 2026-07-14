@@ -47,7 +47,7 @@ Memory routes:
 | `POST /search` | `{query, filters?, user_id?, agent_id?, run_id?, top_k?, threshold?, explain?, show_expired?}` | Calls `Memory.search(...)`. Top-level IDs are deprecated locally but accepted. |
 | `GET /memories` | query params `user_id?`, `agent_id?`, `run_id?`, `top_k?`, `show_expired?` | Scoped list via `Memory.get_all(...)`; all-memory list is admin-only. |
 | `GET /memories/{memory_id}` | none | Calls `Memory.get(...)`. |
-| `PUT /memories/{memory_id}` | `{text?, metadata?, expiration_date?}` | Maps `text` to `Memory.update(data=...)`. |
+| `PUT /memories/{memory_id}` | `{text?, metadata?, expiration_date?}` | Maps `text` to `Memory.update(text=...)`. |
 | `GET /memories/{memory_id}/history` | none | Calls `Memory.history(...)`. |
 | `DELETE /memories/{memory_id}` | none | Calls `Memory.delete(...)`. |
 | `DELETE /memories` | query params `user_id?`, `agent_id?`, `run_id?` | Admin-only scoped delete via `Memory.delete_all(...)`. |

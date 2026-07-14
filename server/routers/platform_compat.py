@@ -1,6 +1,9 @@
+import contextvars
 import json
+import os
 from typing import Any, Dict, List, Optional
 
+import anyio
 import server_state
 from auth import require_admin, verify_auth
 from compat import (
@@ -15,14 +18,28 @@ from compat import (
 )
 from errors import upstream_error
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from mem0.exceptions import ValidationError as Mem0ValidationError
 from pydantic import BaseModel, Field
 from schemas import MessageResponse
 
+try:
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.streamable_http import StreamableHTTPServerTransport
+except ImportError:  # pragma: no cover - exercised only when server deps are not installed
+    FastMCP = None
+    StreamableHTTPServerTransport = None
+
 router = APIRouter(tags=["platform-compat"])
 
 ALL_MEMORIES_LIMIT = 1000
+DEFAULT_MCP_AGENT_ID = "claude-code"
+
+mcp_user_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("mcp_user_id", default=None)
+mcp_agent_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("mcp_agent_id", default=None)
+mcp_app_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("mcp_app_id", default=None)
+
+mcp = FastMCP("mem0-self-hosted") if FastMCP is not None else None
 
 
 class Message(BaseModel):
@@ -181,7 +198,9 @@ def list_memories(
 ):
     filters = normalize_platform_filters(normalize_filters(req.filters))
     try:
-        response = _memory().get_all(filters=filters, top_k=min(page * page_size, ALL_MEMORIES_LIMIT), show_expired=True)
+        response = _memory().get_all(
+            filters=filters, top_k=min(page * page_size, ALL_MEMORIES_LIMIT), show_expired=True
+        )
         results = flatten_memory_response(response)
         start = (page - 1) * page_size
         end = start + page_size
@@ -208,7 +227,7 @@ def update_memory(memory_id: str, req: PlatformMemoryUpdate, _auth=Depends(verif
         fields_set = getattr(req, "model_fields_set", getattr(req, "__fields_set__", set()))
         params: Dict[str, Any] = {"memory_id": memory_id}
         if "text" in fields_set:
-            params["data"] = req.text
+            params["text"] = req.text
         if "metadata" in fields_set:
             params["metadata"] = req.metadata
         if "expiration_date" in fields_set:
@@ -247,7 +266,9 @@ def delete_all_memories(
     run_id: Optional[str] = None,
     _auth=Depends(require_admin),
 ):
-    filters = {k: v for k, v in {"user_id": user_id, "agent_id": agent_id, "app_id": app_id, "run_id": run_id}.items() if v}
+    filters = {
+        k: v for k, v in {"user_id": user_id, "agent_id": agent_id, "app_id": app_id, "run_id": run_id}.items() if v
+    }
     try:
         _delete_by_filters(filters)
         return MessageResponse(message="All relevant memories deleted")
@@ -303,6 +324,57 @@ MCP_TOOLS = {
 }
 
 
+def _resolve_mcp_identity(request: Request) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    user_id = request.headers.get("X-User-ID") or os.getenv("MEM0_MCP_USER_ID")
+    agent_id = request.headers.get("X-Agent-ID") or os.getenv("MEM0_MCP_AGENT_ID", DEFAULT_MCP_AGENT_ID)
+    app_id = request.headers.get("X-App-ID") or request.headers.get("X-Project-ID") or os.getenv("MEM0_MCP_APP_ID")
+    return user_id, agent_id, app_id
+
+
+def _entity_defaults() -> Dict[str, str]:
+    defaults = {}
+    if mcp_user_id_var.get():
+        defaults["user_id"] = mcp_user_id_var.get()
+    if mcp_agent_id_var.get():
+        defaults["agent_id"] = mcp_agent_id_var.get()
+    if mcp_app_id_var.get():
+        defaults["app_id"] = mcp_app_id_var.get()
+    return defaults
+
+
+def _merge_filter_default(filters: Optional[Dict[str, Any]], key: str, value: Optional[str]) -> Dict[str, Any]:
+    if not value:
+        return dict(filters or {})
+    merged = dict(filters or {})
+    if key == "app_id":
+        if "app_id" not in merged and "metadata" not in merged:
+            merged["app_id"] = value
+        return merged
+    if key not in merged and not any(operator in merged for operator in ("AND", "OR", "NOT")):
+        merged[key] = value
+    return merged
+
+
+def _apply_mcp_identity_defaults(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(args)
+    defaults = _entity_defaults()
+    if name == "add_memory":
+        for key, value in defaults.items():
+            payload.setdefault(key, value)
+    elif name in {"search_memories", "get_memories"}:
+        filters = payload.get("filters")
+        for key, value in defaults.items():
+            filters = _merge_filter_default(filters, key, value)
+        if filters:
+            payload["filters"] = filters
+    elif name in {"delete_all_memories", "delete_entities"} and not any(
+        payload.get(key) for key in ("user_id", "agent_id", "app_id", "run_id")
+    ):
+        for key, value in defaults.items():
+            payload.setdefault(key, value)
+    return payload
+
+
 def _jsonrpc_result(req_id: Any, result: Any) -> Dict[str, Any]:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
@@ -331,6 +403,7 @@ def _memory_id_arg(args: Dict[str, Any]) -> str:
 
 
 def _call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    args = _apply_mcp_identity_defaults(name, args)
     if name == "add_memory":
         payload = dict(args)
         if "messages" not in payload and payload.get("text"):
@@ -346,12 +419,18 @@ def _call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "get_memory":
         return _mcp_content(get_memory(_memory_id_arg(args)))
     if name == "update_memory":
-        req = PlatformMemoryUpdate(text=args.get("text"), metadata=args.get("metadata"), expiration_date=args.get("expiration_date"))
+        req = PlatformMemoryUpdate(
+            text=args.get("text"), metadata=args.get("metadata"), expiration_date=args.get("expiration_date")
+        )
         return _mcp_content(update_memory(_memory_id_arg(args), req))
     if name == "delete_memory":
         return _mcp_content(delete_memory(_memory_id_arg(args)).model_dump())
     if name == "delete_all_memories":
-        return _mcp_content(delete_all_memories(args.get("user_id"), args.get("agent_id"), args.get("app_id"), args.get("run_id")).model_dump())
+        return _mcp_content(
+            delete_all_memories(
+                args.get("user_id"), args.get("agent_id"), args.get("app_id"), args.get("run_id")
+            ).model_dump()
+        )
     if name == "delete_entities":
         for entity_type, key in (("user", "user_id"), ("agent", "agent_id"), ("app", "app_id"), ("run", "run_id")):
             if args.get(key):
@@ -366,10 +445,156 @@ def _call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     raise KeyError(name)
 
 
-@router.api_route("/mcp", methods=["POST", "GET", "DELETE"])
-async def mcp_endpoint(request: Request, _auth=Depends(verify_auth)):
+def _call_tool_text(name: str, args: Dict[str, Any]) -> str:
+    return json.dumps(_call_tool(name, args), default=str)
+
+
+if mcp is not None:
+
+    @mcp.tool(name="add_memory", description=MCP_TOOLS["add_memory"])
+    async def mcp_add_memory(
+        text: Optional[str] = None,
+        messages: Optional[list[dict[str, Any]]] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        app_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        infer: Optional[bool] = None,
+    ) -> str:
+        args = {
+            "text": text,
+            "messages": messages,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "app_id": app_id,
+            "run_id": run_id,
+            "metadata": metadata,
+            "infer": infer,
+        }
+        return _call_tool_text("add_memory", {key: value for key, value in args.items() if value is not None})
+
+    @mcp.tool(name="search_memories", description=MCP_TOOLS["search_memories"])
+    async def mcp_search_memories(
+        query: str,
+        filters: Optional[dict[str, Any]] = None,
+        top_k: Optional[int] = None,
+        limit: Optional[int] = None,
+        threshold: Optional[float] = None,
+        rerank: Optional[bool] = None,
+    ) -> str:
+        args = {"query": query, "filters": filters, "top_k": top_k or limit, "threshold": threshold, "rerank": rerank}
+        return _call_tool_text("search_memories", {key: value for key, value in args.items() if value is not None})
+
+    @mcp.tool(name="get_memories", description=MCP_TOOLS["get_memories"])
+    async def mcp_get_memories(
+        filters: Optional[dict[str, Any]] = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> str:
+        return _call_tool_text("get_memories", {"filters": filters, "page": page, "page_size": page_size})
+
+    @mcp.tool(name="get_memory", description=MCP_TOOLS["get_memory"])
+    async def mcp_get_memory(memory_id: str) -> str:
+        return _call_tool_text("get_memory", {"memory_id": memory_id})
+
+    @mcp.tool(name="update_memory", description=MCP_TOOLS["update_memory"])
+    async def mcp_update_memory(
+        memory_id: str,
+        text: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        expiration_date: Optional[str] = None,
+    ) -> str:
+        args = {"memory_id": memory_id, "text": text, "metadata": metadata, "expiration_date": expiration_date}
+        return _call_tool_text("update_memory", {key: value for key, value in args.items() if value is not None})
+
+    @mcp.tool(name="delete_memory", description=MCP_TOOLS["delete_memory"])
+    async def mcp_delete_memory(memory_id: str) -> str:
+        return _call_tool_text("delete_memory", {"memory_id": memory_id})
+
+    @mcp.tool(name="delete_all_memories", description=MCP_TOOLS["delete_all_memories"])
+    async def mcp_delete_all_memories(
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        app_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> str:
+        args = {"user_id": user_id, "agent_id": agent_id, "app_id": app_id, "run_id": run_id}
+        return _call_tool_text("delete_all_memories", {key: value for key, value in args.items() if value is not None})
+
+    @mcp.tool(name="delete_entities", description=MCP_TOOLS["delete_entities"])
+    async def mcp_delete_entities(
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        app_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> str:
+        args = {"user_id": user_id, "agent_id": agent_id, "app_id": app_id, "run_id": run_id}
+        return _call_tool_text("delete_entities", {key: value for key, value in args.items() if value is not None})
+
+    @mcp.tool(name="list_entities", description=MCP_TOOLS["list_entities"])
+    async def mcp_list_entities() -> str:
+        return _call_tool_text("list_entities", {})
+
+    @mcp.tool(name="list_events", description=MCP_TOOLS["list_events"])
+    async def mcp_list_events(limit: int = 100) -> str:
+        return _call_tool_text("list_events", {"limit": limit})
+
+    @mcp.tool(name="get_event_status", description=MCP_TOOLS["get_event_status"])
+    async def mcp_get_event_status(event_id: str) -> str:
+        return _call_tool_text("get_event_status", {"event_id": event_id})
+
+
+async def _handle_fastmcp_streamable_http(request: Request) -> Response:
+    if StreamableHTTPServerTransport is None or mcp is None:
+        raise RuntimeError("FastMCP is not available")
+
+    response_started = False
+    response_status = 200
+    response_headers: list[tuple[bytes, bytes]] = []
+    response_body = bytearray()
+
+    async def capture_send(message):
+        nonlocal response_started, response_status
+        if message["type"] == "http.response.start":
+            response_started = True
+            response_status = message["status"]
+            response_headers.extend(message.get("headers", []))
+        elif message["type"] == "http.response.body":
+            response_body.extend(message.get("body", b""))
+
+    transport = StreamableHTTPServerTransport(mcp_session_id=None, is_json_response_enabled=True)
+    async with anyio.create_task_group() as tg:
+
+        async def run_server(*, task_status=anyio.TASK_STATUS_IGNORED):
+            async with transport.connect() as (read_stream, write_stream):
+                task_status.started()
+                await mcp._mcp_server.run(
+                    read_stream,
+                    write_stream,
+                    mcp._mcp_server.create_initialization_options(),
+                    stateless=True,
+                )
+
+        await tg.start(run_server)
+        await transport.handle_request(request.scope, request.receive, capture_send)
+        await transport.terminate()
+        tg.cancel_scope.cancel()
+
+    if not response_started:
+        return Response(status_code=500, content=b"Transport did not produce a response")
+
+    return Response(
+        content=bytes(response_body),
+        status_code=response_status,
+        headers={k.decode("latin-1"): v.decode("latin-1") for k, v in response_headers},
+    )
+
+
+async def _handle_legacy_jsonrpc_mcp(request: Request) -> JSONResponse | Dict[str, Any]:
     if request.method == "GET":
-        return JSONResponse({"status": "ok", "transport": "streamable-http"})
+        transport = "streamable-http" if mcp is not None else "json-rpc-fallback"
+        return JSONResponse({"status": "ok", "transport": transport})
     if request.method == "DELETE":
         return JSONResponse(status_code=202, content={})
     try:
@@ -391,7 +616,9 @@ async def mcp_endpoint(request: Request, _auth=Depends(verify_auth)):
     if method == "notifications/initialized":
         return JSONResponse(status_code=202, content={})
     if method == "tools/list":
-        return _jsonrpc_result(req_id, {"tools": [_tool_schema(name, description) for name, description in MCP_TOOLS.items()]})
+        return _jsonrpc_result(
+            req_id, {"tools": [_tool_schema(name, description) for name, description in MCP_TOOLS.items()]}
+        )
     if method == "tools/call":
         params = body.get("params") or {}
         name = params.get("name")
@@ -405,3 +632,20 @@ async def mcp_endpoint(request: Request, _auth=Depends(verify_auth)):
         except Exception as exc:
             return _jsonrpc_error(req_id, -32000, str(exc))
     return _jsonrpc_error(req_id, -32601, f"Method not found: {method}")
+
+
+@router.api_route("/mcp/", methods=["POST", "GET", "DELETE"])
+@router.api_route("/mcp", methods=["POST", "GET", "DELETE"])
+async def mcp_endpoint(request: Request, _auth=Depends(verify_auth)):
+    user_id, agent_id, app_id = _resolve_mcp_identity(request)
+    user_token = mcp_user_id_var.set(user_id)
+    agent_token = mcp_agent_id_var.set(agent_id)
+    app_token = mcp_app_id_var.set(app_id)
+    try:
+        if mcp is not None and StreamableHTTPServerTransport is not None:
+            return await _handle_fastmcp_streamable_http(request)
+        return await _handle_legacy_jsonrpc_mcp(request)
+    finally:
+        mcp_user_id_var.reset(user_token)
+        mcp_agent_id_var.reset(agent_token)
+        mcp_app_id_var.reset(app_token)
