@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -70,6 +71,38 @@ def test_bootstrap_can_be_called_repeatedly():
     assert driver.verify_connectivity.call_count == 2
     assert driver.session.call_count == 2
     assert session.run.call_count == len(NEO4J_SCHEMA_STATEMENTS) * 2
+
+
+def test_bootstrap_applies_transaction_timeout_to_every_schema_query():
+    driver, _ = driver_with_session()
+    timeouts = []
+    adapter = Neo4jSchemaAdapter(
+        config(query_timeout_seconds=1.5),
+        driver,
+        query_factory=lambda query, timeout: timeouts.append(timeout) or query,
+    )
+
+    adapter.bootstrap_schema()
+
+    assert timeouts == [1.5] * len(NEO4J_SCHEMA_STATEMENTS)
+
+
+def test_connect_applies_connection_timeout_and_query_factory():
+    driver = MagicMock()
+    graph_database = MagicMock()
+    graph_database.driver.return_value = driver
+    query = MagicMock(side_effect=lambda text, timeout: (text, timeout))
+    neo4j_module = SimpleNamespace(GraphDatabase=graph_database, Query=query)
+
+    with patch.dict("sys.modules", {"neo4j": neo4j_module}):
+        adapter = Neo4jSchemaAdapter.connect(config(connection_timeout_seconds=4.0))
+
+    graph_database.driver.assert_called_once_with(
+        "neo4j://localhost:7687",
+        auth=("neo4j", "secret-password"),
+        connection_timeout=4.0,
+    )
+    assert adapter._query_factory("RETURN 1", 0.5) == ("RETURN 1", 0.5)
 
 
 def test_adapter_context_closes_driver_once_and_rejects_later_bootstrap():

@@ -496,7 +496,18 @@ class Neo4jResult(Protocol):
 
 
 class Neo4jTransaction(Protocol):
-    def run(self, query: str, **parameters: Any) -> Neo4jResult: ...
+    def run(self, query: Any, **parameters: Any) -> Neo4jResult: ...
+
+
+class _TimedTransaction:
+    def __init__(self, transaction: Neo4jTransaction, query_factory: Callable[[str, float], Any], timeout: float):
+        self._transaction = transaction
+        self._query_factory = query_factory
+        self._timeout = timeout
+
+    def run(self, query: Any, **parameters: Any) -> Neo4jResult:
+        timed_query = self._query_factory(query, self._timeout) if isinstance(query, str) else query
+        return self._transaction.run(timed_query, **parameters)
 
 
 class Neo4jSession(Protocol):
@@ -572,7 +583,8 @@ class Neo4jSchemaAdapter:
         self._driver.verify_connectivity()
         with self._driver.session(database=self.config.database) as session:
             for statement in NEO4J_SCHEMA_STATEMENTS:
-                session.run(statement.strip()).consume()
+                query = self._query_factory(statement.strip(), self.config.query_timeout_seconds)
+                session.run(query).consume()
         return len(NEO4J_SCHEMA_STATEMENTS)
 
     def project_relationship(
@@ -597,7 +609,7 @@ class Neo4jSchemaAdapter:
             return []
         parameter_batch = [_projection_parameters(relationship, source) for relationship in relationship_batch]
         with self._driver.session(database=self.config.database) as session:
-            records = session.execute_write(self._project_relationships, parameter_batch)
+            records = session.execute_write(self._timed_callback(self._project_relationships), parameter_batch)
         return [ProjectionResult.model_validate(dict(record)) for record in records]
 
     def replace_relationships(
@@ -622,7 +634,9 @@ class Neo4jSchemaAdapter:
         }
         parameter_batch = [_projection_parameters(relationship, source) for relationship in relationships]
         with self._driver.session(database=self.config.database) as session:
-            result = session.execute_write(self._replace_relationships, parameters, parameter_batch)
+            result = session.execute_write(
+                self._timed_callback(self._replace_relationships), parameters, parameter_batch
+            )
         return GraphUpdateMutation.model_validate(result)
 
     def delete_memory(
@@ -646,7 +660,7 @@ class Neo4jSchemaAdapter:
             "deleted_at": _isoformat(deleted_at),
         }
         with self._driver.session(database=self.config.database) as session:
-            result = session.execute_write(self._delete_memory, parameters)
+            result = session.execute_write(self._timed_callback(self._delete_memory), parameters)
         return GraphLifecycleMutation.model_validate(result)
 
     def apply(self, event: ProjectionEvent) -> ProjectionEventApplication:
@@ -661,7 +675,7 @@ class Neo4jSchemaAdapter:
             raise ValueError("UPSERT and UPDATE projection events require extraction provenance")
 
         with self._driver.session(database=self.config.database) as session:
-            result = session.execute_write(self._apply_projection_event, event)
+            result = session.execute_write(self._timed_callback(self._apply_projection_event), event)
         return ProjectionEventApplication.model_validate(result)
 
     @classmethod
@@ -893,8 +907,11 @@ class Neo4jSchemaAdapter:
             "explanation_limit": explanation_limit,
         }
         with self._driver.session(database=self.config.database) as session:
-            query = self._query_factory(READ_CANDIDATE_SIGNALS_QUERY.strip(), self.config.query_timeout_seconds)
-            records = session.execute_read(self._run_candidate_signals_query, query, parameters)
+            records = session.execute_read(
+                self._timed_callback(self._run_candidate_signals_query),
+                READ_CANDIDATE_SIGNALS_QUERY.strip(),
+                parameters,
+            )
 
         grouped: dict[str, list[GraphSearchExplanation]] = {}
         scores: dict[str, float] = {}
@@ -941,7 +958,7 @@ class Neo4jSchemaAdapter:
             raise RuntimeError("cannot inspect memory with a closed Neo4j adapter")
 
         with self._driver.session(database=self.config.database) as session:
-            record = session.execute_read(self._run_inspection_query, parameters)
+            record = session.execute_read(self._timed_callback(self._run_inspection_query), parameters)
 
         memory_count = int(record["memory_count"])
         if memory_count == 0:
@@ -973,7 +990,7 @@ class Neo4jSchemaAdapter:
             raise RuntimeError("cannot read provenance with a closed Neo4j adapter")
 
         with self._driver.session(database=self.config.database) as session:
-            records = session.execute_read(self._run_provenance_query, query, parameters)
+            records = session.execute_read(self._timed_callback(self._run_provenance_query), query, parameters)
         return [RelationshipProvenance.model_validate(dict(record)) for record in records]
 
     @staticmethod
@@ -992,13 +1009,20 @@ class Neo4jSchemaAdapter:
     ) -> list[Mapping[str, Any]]:
         return list(transaction.run(query, **parameters))
 
+    def _timed_callback(self, callback: Callable[..., Any]) -> Callable[..., Any]:
+        def execute(transaction: Neo4jTransaction, *args: Any) -> Any:
+            timed = _TimedTransaction(transaction, self._query_factory, self.config.query_timeout_seconds)
+            return callback(timed, *args)
+
+        return execute
+
     def reset_collection(self, collection_name: str) -> int:
         """Delete only Mem0 graph data belonging to one configured collection."""
         if self._closed:
             raise RuntimeError("cannot reset a collection with a closed Neo4j adapter")
         normalized = _require_non_empty(collection_name, "collection_name")
         with self._driver.session(database=self.config.database) as session:
-            return int(session.execute_write(self._reset_collection, normalized))
+            return int(session.execute_write(self._timed_callback(self._reset_collection), normalized))
 
     @staticmethod
     def _reset_collection(transaction: Neo4jTransaction, collection_name: str) -> int:
