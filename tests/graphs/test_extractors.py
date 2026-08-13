@@ -1,10 +1,13 @@
 from copy import deepcopy
+import json
 
 import pytest
 from pydantic import ValidationError
 
 from mem0.graphs.extractors import (
     ExtractorIdentity,
+    LLMStructuredRelationshipBackend,
+    RELATIONSHIP_EXTRACTION_PROMPT,
     RelationshipExtractionError,
     RelationshipExtractor,
     StructuredRelationshipBackend,
@@ -157,3 +160,45 @@ def test_extractor_identity_is_strict_and_redacts_no_hidden_state():
     assert identity.version == "1"
     with pytest.raises(ValidationError):
         ExtractorIdentity(name="extractor", version="1", provider_secret="secret")
+
+
+class FakeLLM:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def generate_response(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"relationships": []},
+        '{"relationships": []}',
+        '```json\n{"relationships": []}\n```',
+    ],
+)
+def test_llm_backend_requests_and_parses_one_complete_json_object(response):
+    llm = FakeLLM(response)
+    backend = LLMStructuredRelationshipBackend(llm)
+
+    assert backend.extract("Alice works at Acme") == {"relationships": []}
+    assert llm.calls == [
+        {
+            "messages": [
+                {"role": "system", "content": RELATIONSHIP_EXTRACTION_PROMPT},
+                {"role": "user", "content": "Alice works at Acme"},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+    ]
+
+
+@pytest.mark.parametrize("response", ["[]", "not json", ["not", "an", "object"]])
+def test_llm_backend_rejects_non_object_responses(response):
+    backend = LLMStructuredRelationshipBackend(FakeLLM(response))
+
+    with pytest.raises((TypeError, json.JSONDecodeError)):
+        backend.extract("Alice works at Acme")

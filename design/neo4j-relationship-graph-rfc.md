@@ -624,12 +624,14 @@ point before manual collection backfill.
 No legacy provider code should be copied into the new implementation without a
 specific reviewed adaptation plan.
 
-### 12.2 Second-slice progress
+### 12.2 Second-slice implementation record
 
-The programmatic portion of manual collection backfill is implemented. It now
-includes sequential checkpoints, reconciliation, a bounded vector-store
-reader, and a composition entry point for an initialized OSS `Memory` source.
-The remaining second-slice boundary is a user-facing command that constructs
-the extractor and Neo4j adapter from explicit configuration. Update/delete
-lifecycle behavior and normal memory hooks remain out of scope until that
-command boundary is reviewed.
+Manual collection backfill is implemented. It includes sequential checkpoints,
+reconciliation, a bounded vector-store reader, a composition entry point for an
+initialized OSS `Memory` source, and `mem0 graph backfill`. The command accepts
+an explicit Memory JSON configuration, exact scope and Neo4j connection
+settings, uses the configured Memory LLM through the validated extractor, and
+returns privacy-safe progress. Neo4j credentials can be supplied through
+environment variables and are never included in command results or checkpoint
+data. Update/delete lifecycle behavior and normal memory hooks remain out of
+scope pending review of this completed manual boundary.

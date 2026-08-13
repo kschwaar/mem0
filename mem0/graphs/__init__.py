@@ -20,6 +20,8 @@ from mem0.graphs.composition import (
 )
 from mem0.graphs.extractors import (
     ExtractorIdentity,
+    LLMStructuredRelationshipBackend,
+    RELATIONSHIP_EXTRACTION_PROMPT,
     RelationshipExtractionError,
     RelationshipExtractionPayload,
     RelationshipExtractor,
@@ -86,6 +88,8 @@ __all__ = [
     "RelationshipGraphBackfill",
     "RelationshipGraphBackfillAdapter",
     "ExtractorIdentity",
+    "LLMStructuredRelationshipBackend",
+    "RELATIONSHIP_EXTRACTION_PROMPT",
     "RelationshipExtractionError",
     "RelationshipExtractionPayload",
     "RelationshipExtractor",
