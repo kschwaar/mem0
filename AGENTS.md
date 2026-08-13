@@ -10,6 +10,57 @@ This file provides context for AI coding assistants (Claude Code, Cursor, GitHub
 - **Documentation**: https://docs.mem0.ai
 - **License**: Apache-2.0
 
+## Downstream Branch Governance (Binding)
+
+This fork uses a permanent downstream integration branch. These rules are mandatory for all agents and override generic contribution guidance elsewhere in this file. See `design/adr/0002-downstream-branching-strategy.md` for the decision and alternatives.
+
+### Branch Contracts
+
+| Branch | Contract |
+|--------|----------|
+| `main` | Clean mirror of `upstream/main`. It must contain no personal commits, merge commits, generated files, or fork-only documentation. Update it only with a clean-tree, fast-forward-only merge from `upstream/main`, then push it to `origin/main`. |
+| `personal/main` | Canonical product and default working branch for this fork. It contains upstream plus all accepted personal features. Merge upstream updates and completed personal feature branches here. Do not rebase or force-push it during routine maintenance. |
+| `feature/*`, `fix/*`, `docs/*`, `refactor/*` | Short-lived personal work based on current `personal/main`; merge back into `personal/main`, validate, push, and delete after acceptance. |
+| Explicit upstream-contribution branches | Short-lived work based on `main` and intended only for a PR to the OSS project. Never mix in commits from `personal/main`. |
+
+Before making a tracked change, every agent must run `git status --short --branch` and confirm the current branch matches the requested work. Unless the user explicitly requests an upstream contribution or upstream synchronization, use `personal/main` as the base and integration target. If the current branch is `main`, switch to `personal/main` before editing. If tracked changes make switching unsafe, stop and ask the user; preserve unrelated and untracked files.
+
+### Personal Feature Flow
+
+1. Update `personal/main` with a fast-forward-only pull from `origin/personal/main` when a remote tracking branch exists.
+2. Create the short-lived branch from `personal/main`.
+3. Implement and validate the change using the package-specific checks in this file.
+4. Merge or open a PR into `personal/main`, never `main`. Preserve a meaningful feature boundary with a non-fast-forward merge unless the user explicitly chooses a squash merge.
+5. Re-run affected checks on the integrated result, push `personal/main`, and delete the merged feature branch when requested or when the repository's PR workflow handles deletion.
+
+Stacked feature branches are exceptional. An agent must state the dependency explicitly and merge the base feature before its dependent feature. Independent features must branch directly from `personal/main` rather than from one another.
+
+### Upstream Synchronization Flow
+
+Only perform an upstream synchronization when the user explicitly asks for it. The worktree must have no tracked changes. Use this order:
+
+```bash
+git fetch upstream
+git switch main
+git merge --ff-only upstream/main
+git push origin main
+git switch personal/main
+git merge --no-ff main
+# Resolve conflicts deliberately and run all affected checks.
+git push origin personal/main
+```
+
+If `main` cannot fast-forward to `upstream/main`, stop: do not merge, rebase, reset, or force-push to manufacture synchronization. Diagnose the divergence and request direction. During the `main` to `personal/main` merge, preserve intentional fork behavior while also incorporating upstream bug fixes, security fixes, API changes, and migrations. Never resolve conflicts wholesale with `--ours` or `--theirs` without file-by-file justification.
+
+### Prohibited History Operations
+
+- Never commit personal work directly to `main` or merge `personal/main` into `main`.
+- Never target `main` with a personal feature PR.
+- Never routinely rebase `personal/main`, rewrite its published history, or force-push it.
+- Never update `main` with a non-fast-forward merge, cherry-pick, squash, or personal conflict-resolution commit.
+- Never delete or rewrite an unmerged feature branch without explicit user approval and a recoverable backup ref.
+- Do not push, merge, rebase, reset, or delete branches merely because documentation or analysis was requested.
+
 ## Repository Structure
 
 This is a **polyglot monorepo** containing Python and TypeScript packages, CLIs, servers, plugins, and documentation.
@@ -495,13 +546,18 @@ When uncertain about expected artifacts, ask for clarification.
 
 ### Workflow
 
-1. Fork and clone the repository.
-2. Create a feature branch from `main` (e.g., `feature/my-new-feature`).
+For personal product work, follow the binding downstream flow above:
+
+1. Start from current `personal/main`.
+2. Create a short-lived branch (for example, `feature/my-new-feature`).
 3. Make your changes — add tests, docs, and examples as appropriate.
 4. Run linting and tests for every package you modified (see commands above).
 5. Run `pre-commit install` on first setup — hooks run ruff + isort automatically.
 6. Commit with a clear message following [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `docs:`, `refactor:`).
-7. Push and open a Pull Request against `main`.
+7. Push and open a Pull Request against `personal/main`.
+8. Merge the accepted change, validate the integrated result, and delete the short-lived branch.
+
+For a contribution intended for the original OSS project, start from clean `main`, keep the branch free of downstream-only commits, and open the PR against the upstream project's `main`. Do not merge that branch into this fork's `main`; let it return through a later upstream synchronization if accepted upstream.
 
 ### Pull Request Requirements
 
