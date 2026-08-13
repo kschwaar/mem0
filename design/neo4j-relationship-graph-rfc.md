@@ -524,6 +524,13 @@ by ID and fails closed on malformed, duplicate, mismatched-scope or truncated
 records. Automatic repair, deletion, concurrency and a user-facing CLI are
 later pieces.
 
+The programmatic composition entry point accepts an initialized OSS `Memory`
+instance, a graph adapter, an extractor and a checkpoint directory. It derives
+the canonical collection and vector store from `Memory`, so callers cannot
+accidentally wire the reader to a different collection. Calling `run` is the
+explicit graph-projection boundary; constructing the entry point does not
+bootstrap Neo4j or alter canonical memory records.
+
 ## 9. Security and privacy requirements
 
 - Exact scope isolation is enforced in every `MERGE`, lookup and traversal.
@@ -616,3 +623,13 @@ point before manual collection backfill.
 
 No legacy provider code should be copied into the new implementation without a
 specific reviewed adaptation plan.
+
+### 12.2 Second-slice progress
+
+The programmatic portion of manual collection backfill is implemented. It now
+includes sequential checkpoints, reconciliation, a bounded vector-store
+reader, and a composition entry point for an initialized OSS `Memory` source.
+The remaining second-slice boundary is a user-facing command that constructs
+the extractor and Neo4j adapter from explicit configuration. Update/delete
+lifecycle behavior and normal memory hooks remain out of scope until that
+command boundary is reviewed.

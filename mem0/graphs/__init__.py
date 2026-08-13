@@ -13,6 +13,11 @@ from mem0.graphs.backfill import (
     JsonBackfillCheckpointStore,
     RelationshipGraphBackfillRunner,
 )
+from mem0.graphs.composition import (
+    CanonicalMemorySource,
+    RelationshipGraphBackfill,
+    RelationshipGraphBackfillAdapter,
+)
 from mem0.graphs.extractors import (
     ExtractorIdentity,
     RelationshipExtractionError,
@@ -77,6 +82,9 @@ __all__ = [
     "GraphMemoryState",
     "JsonBackfillCheckpointStore",
     "RelationshipGraphBackfillRunner",
+    "CanonicalMemorySource",
+    "RelationshipGraphBackfill",
+    "RelationshipGraphBackfillAdapter",
     "ExtractorIdentity",
     "RelationshipExtractionError",
     "RelationshipExtractionPayload",
