@@ -164,3 +164,85 @@ def cmd_graph_backfill(
 
 def default_checkpoint_directory() -> Path:
     return Path(os.environ.get("MEM0_DIR", Path.home() / ".mem0")) / "graph-backfill"
+
+
+def _load_configured_memory(path: Path):
+    runtime = _load_graph_runtime()
+    config = _read_memory_config(path)
+    graph_config = config.get("relationship_graph")
+    if not isinstance(graph_config, dict) or not graph_config.get("enabled"):
+        raise ValueError("memory config must enable relationship_graph")
+    graph_config["auto_start_worker"] = False
+    memory = runtime["Memory"].from_config(config)
+    if getattr(memory, "relationship_graph", None) is None:
+        with suppress(Exception):
+            memory.close()
+        raise RuntimeError("relationship graph runtime was not composed")
+    return memory
+
+
+def _admin_output(command: str, data: dict[str, Any], output: str) -> None:
+    from mem0_cli.state import is_agent_mode
+
+    if is_agent_mode():
+        from mem0_cli.output import format_agent_envelope
+
+        format_agent_envelope(console, command=command, data=data)
+    elif output == "json":
+        console.print(json.dumps(data, indent=2, sort_keys=True))
+    elif output == "text":
+        for key, value in data.items():
+            console.print(f"{key}: {value}")
+    else:
+        raise ValueError("output must be 'text' or 'json'")
+
+
+def cmd_graph_admin(
+    *,
+    memory_config: Path,
+    action: str,
+    output: str,
+    event_id: str | None = None,
+    limit: int = 100,
+    confirmed: bool = False,
+) -> None:
+    """Run one bounded administrative action against a configured graph runtime."""
+    memory = None
+    try:
+        if output not in {"text", "json"}:
+            raise ValueError("output must be 'text' or 'json'")
+        memory = _load_configured_memory(memory_config)
+        runtime = memory.relationship_graph
+        if action == "status":
+            data = runtime.worker_service.health().model_dump(mode="json")
+        elif action == "drain":
+            processed = runtime.worker_service.drain(max_events=limit)
+            data = {
+                "processed": processed,
+                "health": runtime.worker_service.health().model_dump(mode="json"),
+            }
+        elif action == "reconcile":
+            data = runtime.reconciler.reconcile(limit=limit).model_dump(mode="json")
+        elif action == "replay":
+            if not event_id:
+                raise ValueError("event_id is required for replay")
+            event = runtime.outbox.replay(event_id)
+            data = {"event_id": event.intent.event_id, "status": event.status.value}
+        elif action == "reset":
+            if not confirmed:
+                raise ValueError("graph reset requires --yes")
+            data = {"collection_name": runtime.collection_name, "deleted": runtime.reset()}
+        else:
+            raise ValueError(f"unsupported graph action: {action}")
+        _admin_output(f"graph {action}", data, output)
+    except Exception as error:
+        print_error(
+            err_console,
+            f"Graph {action} failed ({type(error).__name__}).",
+            hint="Check the first-class relationship_graph config and retry the bounded operation.",
+        )
+        raise typer.Exit(1) from None
+    finally:
+        if memory is not None:
+            with suppress(Exception):
+                memory.close()

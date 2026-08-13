@@ -1149,6 +1149,92 @@ def graph_backfill(
     )
 
 
+def _run_graph_admin(
+    *,
+    memory_config: Path,
+    action: str,
+    output: str,
+    event_id: str | None = None,
+    limit: int = 100,
+    confirmed: bool = False,
+) -> None:
+    from mem0_cli.commands.graph import cmd_graph_admin
+
+    cmd_graph_admin(
+        memory_config=memory_config,
+        action=action,
+        output=output,
+        event_id=event_id,
+        limit=limit,
+        confirmed=confirmed,
+    )
+
+
+@graph_app.command("status")
+def graph_status(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Show projection queue health and lag without starting a worker."""
+    _run_graph_admin(memory_config=memory_config, action="status", output=output)
+
+
+@graph_app.command("drain")
+def graph_drain(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    limit: int = typer.Option(
+        100, "--limit", min=1, max=100_000, help="Maximum events to process."
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Process a bounded number of ready or retryable projection events."""
+    _run_graph_admin(memory_config=memory_config, action="drain", output=output, limit=limit)
+
+
+@graph_app.command("reconcile")
+def graph_reconcile(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    limit: int = typer.Option(
+        100, "--limit", min=1, max=100_000, help="Maximum pending intents to inspect."
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Republish stranded pending intents only when canonical content still matches."""
+    _run_graph_admin(memory_config=memory_config, action="reconcile", output=output, limit=limit)
+
+
+@graph_app.command("replay")
+def graph_replay(
+    event_id: str = typer.Argument(..., help="Applied or dead-letter event ID."),
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Move one applied or dead-letter event back to the ready queue."""
+    _run_graph_admin(memory_config=memory_config, action="replay", output=output, event_id=event_id)
+
+
+@graph_app.command("reset")
+def graph_reset(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="Confirm deletion of the configured collection namespace."
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Delete only graph data in the configured Mem0 collection namespace."""
+    _run_graph_admin(memory_config=memory_config, action="reset", output=output, confirmed=yes)
+
+
 app.add_typer(graph_app, name="graph", rich_help_panel="Management")
 
 

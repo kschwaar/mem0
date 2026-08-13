@@ -2,6 +2,7 @@ import json
 from io import StringIO
 from types import SimpleNamespace
 from typing import Any, ClassVar
+from unittest.mock import MagicMock
 
 import pytest
 from rich.console import Console
@@ -10,6 +11,8 @@ from typer import Exit
 from mem0.graphs.backfill import BackfillCheckpoint, BackfillStatus
 from mem0.graphs.extractors import ExtractorIdentity
 from mem0.graphs.models import GraphScope
+from mem0.graphs.operations import ProjectionReconciliationReport, ProjectionWorkerHealth
+from mem0.graphs.outbox import ProjectionOutboxStats
 from mem0_cli.commands import graph as graph_command
 
 
@@ -219,3 +222,90 @@ def test_invalid_memory_config_is_rejected_without_loading_runtime(tmp_path):
 
     with pytest.raises(ValueError, match="must contain an object"):
         graph_command._read_memory_config(path)
+
+
+class FakeAdminRuntime:
+    collection_name = "memories"
+
+    def __init__(self):
+        self.worker_service = MagicMock()
+        self.worker_service.health.return_value = ProjectionWorkerHealth(
+            running=False,
+            outbox=ProjectionOutboxStats(
+                pending=1,
+                ready=2,
+                processing=0,
+                retry=0,
+                applied=3,
+                dead_letter=0,
+            ),
+        )
+        self.worker_service.drain.return_value = 2
+        self.reconciler = MagicMock()
+        self.reconciler.reconcile.return_value = ProjectionReconciliationReport(
+            examined=1,
+            published=1,
+            missing=0,
+            hash_mismatch=0,
+            failed=0,
+        )
+        self.outbox = MagicMock()
+        self.outbox.replay.return_value = SimpleNamespace(
+            intent=SimpleNamespace(event_id="event-1"), status=SimpleNamespace(value="READY")
+        )
+        self.reset = MagicMock(return_value=7)
+
+
+class FakeAdminMemory:
+    def __init__(self):
+        self.relationship_graph = FakeAdminRuntime()
+        self.close = MagicMock()
+
+
+@pytest.mark.parametrize("action", ["status", "drain", "reconcile", "replay", "reset"])
+def test_admin_actions_are_bounded_and_close_memory(tmp_path, monkeypatch, action):
+    path = tmp_path / "memory.json"
+    path.write_text("{}", encoding="utf-8")
+    memory = FakeAdminMemory()
+    output = StringIO()
+    monkeypatch.setattr(graph_command, "_load_configured_memory", lambda config: memory)
+    monkeypatch.setattr(
+        graph_command, "console", Console(file=output, force_terminal=False, no_color=True)
+    )
+
+    graph_command.cmd_graph_admin(
+        memory_config=path,
+        action=action,
+        output="json",
+        event_id="event-1",
+        limit=12,
+        confirmed=True,
+    )
+
+    parsed = json.loads(output.getvalue())
+    assert parsed
+    memory.close.assert_called_once_with()
+    if action == "drain":
+        memory.relationship_graph.worker_service.drain.assert_called_once_with(max_events=12)
+    if action == "reconcile":
+        memory.relationship_graph.reconciler.reconcile.assert_called_once_with(limit=12)
+    if action == "reset":
+        memory.relationship_graph.reset.assert_called_once_with()
+
+
+def test_reset_requires_explicit_confirmation(tmp_path, monkeypatch):
+    path = tmp_path / "memory.json"
+    path.write_text("{}", encoding="utf-8")
+    memory = FakeAdminMemory()
+    errors = StringIO()
+    monkeypatch.setattr(graph_command, "_load_configured_memory", lambda config: memory)
+    monkeypatch.setattr(
+        graph_command, "err_console", Console(file=errors, force_terminal=False, no_color=True)
+    )
+
+    with pytest.raises(Exit):
+        graph_command.cmd_graph_admin(memory_config=path, action="reset", output="json")
+
+    memory.relationship_graph.reset.assert_not_called()
+    memory.close.assert_called_once_with()
+    assert "requires --yes" not in errors.getvalue()
