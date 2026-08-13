@@ -48,14 +48,14 @@ def record(assertion_id, confidence):
     }
 
 
-def adapter_with_records(records):
+def adapter_with_records(records, *, query_factory=lambda query, timeout: query):
     driver = MagicMock()
     session = MagicMock()
     transaction = FakeTransaction(records)
     driver.session.return_value.__enter__.return_value = session
     session.execute_read.side_effect = lambda callback, *args: callback(transaction, *args)
     config = Neo4jGraphConfig(uri="neo4j://localhost:7687", username="neo4j", password="password")
-    return Neo4jSchemaAdapter(config, driver), transaction
+    return Neo4jSchemaAdapter(config, driver, query_factory=query_factory), transaction
 
 
 def test_candidate_signals_aggregate_confidence_and_explanations_in_exact_scope():
@@ -117,3 +117,19 @@ def test_candidate_signals_skip_database_for_empty_inputs():
 
     assert result == []
     assert transaction.calls == []
+
+
+def test_candidate_read_applies_configured_transaction_timeout():
+    calls = []
+    adapter, transaction = adapter_with_records([], query_factory=lambda query, timeout: calls.append(timeout) or query)
+
+    adapter.candidate_signals(
+        collection_name="memories",
+        scope=GraphScope(user_id="user-1"),
+        query_entities=[EntityReference(text="Alice", semantic_type="PERSON")],
+        candidate_memory_ids=["memory-1"],
+        explanation_limit=2,
+    )
+
+    assert calls == [0.25]
+    assert transaction.calls[0][0] == READ_CANDIDATE_SIGNALS_QUERY.strip()

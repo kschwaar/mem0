@@ -77,6 +77,7 @@ from mem0.vector_stores.base import VectorStoreBase
 if TYPE_CHECKING:
     from mem0.graphs.hooks import RelationshipGraphWriteHook
     from mem0.graphs.retrieval import RelationshipGraphSearch
+    from mem0.graphs.runtime import RelationshipGraphRuntime
 
 # Suppress SWIG deprecation warnings globally
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*SwigPy.*")
@@ -535,6 +536,7 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         relationship_graph_search: Optional["RelationshipGraphSearch"] = None,
     ):
         self.config = config
+        self.relationship_graph: Optional["RelationshipGraphRuntime"] = None
         self._graph_write_hook = graph_write_hook
         self._relationship_graph_search = relationship_graph_search
 
@@ -551,6 +553,7 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         self.collection_name = self.config.vector_store.config.collection_name
         self.api_version = self.config.version
         self.custom_instructions = self.config.custom_instructions
+        self._configure_relationship_graph(graph_write_hook, relationship_graph_search)
 
         # Initialize reranker if configured
         self.reranker = None
@@ -597,6 +600,18 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
             )
 
         capture_event("mem0.init", self, {"sync_type": "sync"})
+
+    def _configure_relationship_graph(self, graph_write_hook, relationship_graph_search):
+        graph_config = self.config.relationship_graph
+        if not graph_config.enabled:
+            return
+        if graph_write_hook is not None or relationship_graph_search is not None:
+            raise ValueError("relationship_graph configuration cannot be combined with injected graph components")
+        from mem0.graphs.runtime import RelationshipGraphRuntime
+
+        self.relationship_graph = RelationshipGraphRuntime.compose(self, graph_config)
+        self._graph_write_hook = self.relationship_graph.write_hook
+        self._relationship_graph_search = self.relationship_graph.search
 
     @property
     def project(self):
@@ -2215,6 +2230,9 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         """
         logger.warning("Resetting all memories")
 
+        if self.relationship_graph is not None and self.relationship_graph.reset_on_memory_reset:
+            self.relationship_graph.reset()
+
         self.db.reset()
         self.db.close()
         self.db = SQLiteManager(self.config.history_db_path)
@@ -2243,6 +2261,8 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         if hasattr(self, "db") and self.db is not None:
             self.db.close()
             self.db = None
+        if self.relationship_graph is not None:
+            self.relationship_graph.close()
 
     def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")
@@ -2257,6 +2277,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         relationship_graph_search: Optional["RelationshipGraphSearch"] = None,
     ):
         self.config = config
+        self.relationship_graph: Optional["RelationshipGraphRuntime"] = None
         self._graph_write_hook = graph_write_hook
         self._relationship_graph_search = relationship_graph_search
 
@@ -2273,6 +2294,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         self.collection_name = self.config.vector_store.config.collection_name
         self.api_version = self.config.version
         self.custom_instructions = self.config.custom_instructions
+        self._configure_relationship_graph(graph_write_hook, relationship_graph_search)
         self._entity_store = None
 
         # Initialize reranker if configured
@@ -2301,6 +2323,18 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
             )
 
         capture_event("mem0.init", self, {"sync_type": "async"})
+
+    def _configure_relationship_graph(self, graph_write_hook, relationship_graph_search):
+        graph_config = self.config.relationship_graph
+        if not graph_config.enabled:
+            return
+        if graph_write_hook is not None or relationship_graph_search is not None:
+            raise ValueError("relationship_graph configuration cannot be combined with injected graph components")
+        from mem0.graphs.runtime import RelationshipGraphRuntime
+
+        self.relationship_graph = RelationshipGraphRuntime.compose(self, graph_config)
+        self._graph_write_hook = self.relationship_graph.write_hook
+        self._relationship_graph_search = self.relationship_graph.search
 
     @property
     def project(self):
@@ -3975,6 +4009,8 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
             Recreates the vector store with a new client
         """
         logger.warning("Resetting all memories")
+        if self.relationship_graph is not None and self.relationship_graph.reset_on_memory_reset:
+            await asyncio.to_thread(self.relationship_graph.reset)
         await asyncio.to_thread(self.vector_store.delete_col)
 
         gc.collect()
@@ -4005,6 +4041,8 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         if hasattr(self, "db") and self.db is not None:
             self.db.close()
             self.db = None
+        if self.relationship_graph is not None:
+            self.relationship_graph.close()
 
     async def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")

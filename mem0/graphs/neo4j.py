@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from types import TracebackType
-from typing import Any, Iterable, Mapping, Optional, Protocol, Type
+from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Type
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
@@ -194,6 +194,20 @@ RETURN
 ORDER BY memory_id ASC, confidence DESC, assertion_id ASC
 """
 
+DELETE_COLLECTION_EVIDENCE_QUERY = """
+MATCH (evidence:Evidence)-[:FROM_MEMORY]->(memory:Mem0Memory {collection_name: $collection_name})
+DETACH DELETE evidence
+RETURN count(evidence) AS evidence_deleted
+"""
+
+DELETE_COLLECTION_NODES_QUERY = """
+MATCH (node)
+WHERE node.collection_name = $collection_name
+  AND (node:Mem0Memory OR node:Mem0Entity OR node:RelationshipAssertion OR node:ProjectionEvent)
+DETACH DELETE node
+RETURN count(node) AS nodes_deleted
+"""
+
 PROJECT_RELATIONSHIP_QUERY = """
 MERGE (memory:Mem0Memory {
     collection_name: $collection_name,
@@ -248,6 +262,8 @@ ON MATCH SET
     assertion.updated_at = $recorded_at
 MERGE (evidence:Evidence {evidence_id: $evidence_id})
 ON CREATE SET
+    evidence.collection_name = $collection_name,
+    evidence.scope_key = $scope_key,
     evidence.memory_id = $memory_id,
     evidence.memory_hash = $memory_hash,
     evidence.excerpt_hash = $excerpt_hash,
@@ -457,6 +473,8 @@ class Neo4jGraphConfig(BaseModel):
     username: str = Field(min_length=1)
     password: SecretStr
     database: str = Field(default="neo4j", min_length=1)
+    connection_timeout_seconds: float = Field(default=10.0, gt=0.0, le=300.0)
+    query_timeout_seconds: float = Field(default=0.25, gt=0.0, le=30.0)
 
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
@@ -517,16 +535,23 @@ class GraphLifecycleConflictError(RuntimeError):
 class Neo4jSchemaAdapter:
     """Own a Neo4j driver and apply the relationship-graph schema."""
 
-    def __init__(self, config: Neo4jGraphConfig, driver: Neo4jDriver):
+    def __init__(
+        self,
+        config: Neo4jGraphConfig,
+        driver: Neo4jDriver,
+        *,
+        query_factory: Callable[[str, float], Any] = lambda query, timeout: query,
+    ):
         self.config = config
         self._driver = driver
+        self._query_factory = query_factory
         self._closed = False
 
     @classmethod
     def connect(cls, config: Neo4jGraphConfig) -> "Neo4jSchemaAdapter":
         """Create an adapter using the optional Neo4j Python dependency."""
         try:
-            from neo4j import GraphDatabase
+            from neo4j import GraphDatabase, Query
         except ImportError as error:
             raise ImportError(
                 'Neo4j graph support requires the optional dependency: install mem0ai with the "graphs" extra'
@@ -535,8 +560,9 @@ class Neo4jSchemaAdapter:
         driver = GraphDatabase.driver(
             config.uri,
             auth=(config.username, config.password.get_secret_value()),
+            connection_timeout=config.connection_timeout_seconds,
         )
-        return cls(config=config, driver=driver)
+        return cls(config=config, driver=driver, query_factory=lambda query, timeout: Query(query, timeout=timeout))
 
     def bootstrap_schema(self) -> int:
         """Apply every idempotent schema statement and return the count applied."""
@@ -867,7 +893,8 @@ class Neo4jSchemaAdapter:
             "explanation_limit": explanation_limit,
         }
         with self._driver.session(database=self.config.database) as session:
-            records = session.execute_read(self._run_candidate_signals_query, parameters)
+            query = self._query_factory(READ_CANDIDATE_SIGNALS_QUERY.strip(), self.config.query_timeout_seconds)
+            records = session.execute_read(self._run_candidate_signals_query, query, parameters)
 
         grouped: dict[str, list[GraphSearchExplanation]] = {}
         scores: dict[str, float] = {}
@@ -960,9 +987,24 @@ class Neo4jSchemaAdapter:
     @staticmethod
     def _run_candidate_signals_query(
         transaction: Neo4jTransaction,
+        query: Any,
         parameters: Mapping[str, Any],
     ) -> list[Mapping[str, Any]]:
-        return list(transaction.run(READ_CANDIDATE_SIGNALS_QUERY.strip(), **parameters))
+        return list(transaction.run(query, **parameters))
+
+    def reset_collection(self, collection_name: str) -> int:
+        """Delete only Mem0 graph data belonging to one configured collection."""
+        if self._closed:
+            raise RuntimeError("cannot reset a collection with a closed Neo4j adapter")
+        normalized = _require_non_empty(collection_name, "collection_name")
+        with self._driver.session(database=self.config.database) as session:
+            return int(session.execute_write(self._reset_collection, normalized))
+
+    @staticmethod
+    def _reset_collection(transaction: Neo4jTransaction, collection_name: str) -> int:
+        evidence = transaction.run(DELETE_COLLECTION_EVIDENCE_QUERY.strip(), collection_name=collection_name).single()
+        nodes = transaction.run(DELETE_COLLECTION_NODES_QUERY.strip(), collection_name=collection_name).single()
+        return int(evidence["evidence_deleted"] if evidence else 0) + int(nodes["nodes_deleted"] if nodes else 0)
 
     @staticmethod
     def _run_inspection_query(

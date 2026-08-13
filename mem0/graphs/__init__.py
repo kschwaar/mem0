@@ -57,6 +57,8 @@ from mem0.graphs.models import (
     excerpt_sha256,
 )
 from mem0.graphs.neo4j import (
+    DELETE_COLLECTION_EVIDENCE_QUERY,
+    DELETE_COLLECTION_NODES_QUERY,
     DELETE_MEMORY_EVIDENCE_QUERY,
     INSPECT_MEMORY_QUERY,
     LIFECYCLE_TARGET_QUERY,
@@ -90,6 +92,12 @@ from mem0.graphs.outbox import (
     ProjectionOutboxWorker,
     SQLiteProjectionOutbox,
 )
+from mem0.graphs.operations import (
+    ProjectionOutboxReconciler,
+    ProjectionReconciliationReport,
+    ProjectionWorkerHealth,
+    ProjectionWorkerService,
+)
 from mem0.graphs.readers import (
     CanonicalMemoryReadError,
     CanonicalMemoryRecordError,
@@ -101,6 +109,7 @@ from mem0.graphs.retrieval import (
     GraphCandidateSignal,
     GraphSearchExplanation,
     RelationshipGraphCandidateAdapter,
+    RelationshipGraphCircuitOpenError,
     RelationshipGraphSearch,
 )
 from mem0.graphs.service import (
@@ -110,6 +119,7 @@ from mem0.graphs.service import (
     ProjectionVerificationError,
     RelationshipGraphProjectionAdapter,
 )
+from mem0.graphs.runtime import RelationshipGraphRuntime
 
 __all__ = [
     "BackfillCheckpoint",
@@ -166,6 +176,12 @@ __all__ = [
     "ProjectionOutboxStats",
     "ProjectionOutboxWorker",
     "SQLiteProjectionOutbox",
+    "ProjectionOutboxReconciler",
+    "ProjectionReconciliationReport",
+    "ProjectionWorkerHealth",
+    "ProjectionWorkerService",
+    "DELETE_COLLECTION_EVIDENCE_QUERY",
+    "DELETE_COLLECTION_NODES_QUERY",
     "INSPECT_MEMORY_QUERY",
     "DELETE_MEMORY_EVIDENCE_QUERY",
     "LIFECYCLE_TARGET_QUERY",
@@ -191,12 +207,14 @@ __all__ = [
     "GraphCandidateSignal",
     "GraphSearchExplanation",
     "RelationshipGraphCandidateAdapter",
+    "RelationshipGraphCircuitOpenError",
     "RelationshipGraphSearch",
     "MemoryGraphProjectionRequest",
     "MemoryGraphProjectionResult",
     "MemoryGraphProjectionService",
     "ProjectionVerificationError",
     "RelationshipGraphProjectionAdapter",
+    "RelationshipGraphRuntime",
     "assertion_dedupe_key",
     "assertion_id",
     "entity_id",

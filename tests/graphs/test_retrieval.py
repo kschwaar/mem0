@@ -6,6 +6,7 @@ from mem0.graphs.retrieval import (
     GraphCandidateSignal,
     GraphSearchExplanation,
     RelationshipGraphSearch,
+    RelationshipGraphCircuitOpenError,
 )
 
 
@@ -110,3 +111,32 @@ def test_search_with_no_entities_or_candidates_never_calls_adapter():
 def test_search_configuration_is_bounded(kwargs, message):
     with pytest.raises(ValueError, match=message):
         RelationshipGraphSearch(adapter=FakeAdapter([]), **kwargs)
+
+
+def test_circuit_breaker_opens_after_repeated_failures_and_recovers_after_cooldown():
+    now = [10.0]
+    adapter = FakeAdapter([])
+    adapter.candidate_signals = lambda **kwargs: (_ for _ in ()).throw(ConnectionError("unavailable"))
+    search = RelationshipGraphSearch(
+        adapter=adapter,
+        failure_threshold=2,
+        cooldown_seconds=5,
+        clock=lambda: now[0],
+    )
+    arguments = {
+        "collection_name": "memories",
+        "filters": {"user_id": "user-1"},
+        "query_entities": [("PERSON", "Alice")],
+        "candidate_memory_ids": ["memory-1"],
+    }
+
+    with pytest.raises(ConnectionError):
+        search.signals(**arguments)
+    with pytest.raises(ConnectionError):
+        search.signals(**arguments)
+    with pytest.raises(RelationshipGraphCircuitOpenError):
+        search.signals(**arguments)
+
+    now[0] = 15.0
+    adapter.candidate_signals = lambda **kwargs: []
+    assert search.signals(**arguments) == {}
