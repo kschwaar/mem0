@@ -91,7 +91,13 @@ class RelationshipGraphRuntime:
                 lease_seconds=config.worker_lease_seconds,
                 max_attempts=config.worker_max_attempts,
             )
-            service = ProjectionWorkerService(worker=worker, outbox=outbox, poll_seconds=config.worker_poll_seconds)
+            service = ProjectionWorkerService(
+                worker=worker,
+                outbox=outbox,
+                poll_seconds=config.worker_poll_seconds,
+                max_lag_seconds=config.max_projection_lag_seconds,
+                max_dead_letter_events=config.max_dead_letter_events,
+            )
             reconciler = ProjectionOutboxReconciler(
                 outbox=outbox,
                 producer=producer,

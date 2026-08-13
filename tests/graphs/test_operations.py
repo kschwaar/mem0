@@ -65,10 +65,27 @@ def test_worker_service_starts_stops_and_reports_queue_health(tmp_path):
     service.stop()
 
     assert health.running is True
+    assert health.healthy is True
     assert health.outbox.pending == 1
     assert health.lag_seconds is not None
     assert worker.calls >= 1
     assert service.running is False
+    outbox.close()
+
+
+def test_worker_health_emits_machine_readable_lag_alert(tmp_path):
+    outbox = SQLiteProjectionOutbox(tmp_path / "outbox.sqlite3")
+    event = pending(outbox, event_id="old")
+    service = ProjectionWorkerService(
+        worker=EmptyWorker(),
+        outbox=outbox,
+        max_lag_seconds=1,
+    )
+
+    health = service.health(now=event.created_at.replace(year=event.created_at.year + 1))
+
+    assert health.healthy is False
+    assert health.alerts == ("projection_lag",)
     outbox.close()
 
 

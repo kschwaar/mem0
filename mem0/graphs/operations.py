@@ -22,6 +22,8 @@ from mem0.graphs.outbox import (
 
 class ProjectionWorkerHealth(BaseModel):
     running: bool
+    healthy: bool = True
+    alerts: tuple[str, ...] = ()
     last_error_type: Optional[str] = None
     outbox: ProjectionOutboxStats
     lag_seconds: Optional[float] = Field(default=None, ge=0.0)
@@ -48,12 +50,18 @@ class ProjectionWorkerService:
         worker: ProjectionOutboxWorker,
         outbox: SQLiteProjectionOutbox,
         poll_seconds: float = 0.25,
+        max_lag_seconds: float = 60.0,
+        max_dead_letter_events: int = 0,
     ):
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
+        if max_lag_seconds <= 0 or max_dead_letter_events < 0:
+            raise ValueError("health thresholds must not be negative")
         self._worker = worker
         self._outbox = outbox
         self._poll_seconds = poll_seconds
+        self._max_lag_seconds = max_lag_seconds
+        self._max_dead_letter_events = max_dead_letter_events
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_error_type: Optional[str] = None
@@ -91,8 +99,17 @@ class ProjectionWorkerService:
         if stats.oldest_unapplied_at is not None:
             current = now or datetime.now(timezone.utc)
             lag = max(0.0, (current - stats.oldest_unapplied_at).total_seconds())
+        alerts = []
+        if lag is not None and lag > self._max_lag_seconds:
+            alerts.append("projection_lag")
+        if stats.dead_letter > self._max_dead_letter_events:
+            alerts.append("dead_letter")
+        if self._last_error_type is not None:
+            alerts.append("worker_error")
         return ProjectionWorkerHealth(
             running=self.running,
+            healthy=not alerts,
+            alerts=tuple(alerts),
             last_error_type=self._last_error_type,
             outbox=stats,
             lag_seconds=lag,
