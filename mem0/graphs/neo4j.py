@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from types import TracebackType
+import hashlib
+import json
 from datetime import datetime, timezone
+from types import TracebackType
 from typing import Any, Iterable, Mapping, Optional, Protocol, Type
 from uuid import UUID
 
@@ -12,10 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from mem0.graphs.models import (
     GraphLifecycleMutation,
     GraphMemoryState,
+    GraphScope,
     GraphUpdateMutation,
+    ProjectionMethod,
     ProjectionResult,
     ProjectionSource,
-    GraphScope,
     RelationshipCandidate,
     RelationshipProvenance,
     assertion_dedupe_key,
@@ -23,9 +26,19 @@ from mem0.graphs.models import (
     entity_id,
     evidence_id,
 )
-
+from mem0.graphs.outbox import (
+    ProjectionEvent,
+    ProjectionEventApplication,
+    ProjectionEventOperation,
+    ProjectionEventPayload,
+)
 
 NEO4J_SCHEMA_STATEMENTS = (
+    """
+    CREATE CONSTRAINT mem0_projection_event_id IF NOT EXISTS
+    FOR (event:ProjectionEvent)
+    REQUIRE event.event_id IS UNIQUE
+    """,
     """
     CREATE CONSTRAINT mem0_memory_scope_id IF NOT EXISTS
     FOR (memory:Mem0Memory)
@@ -71,6 +84,7 @@ NEO4J_SCHEMA_STATEMENTS = (
 NEO4J_SCHEMA_OBJECT_NAMES = frozenset(
     {
         "mem0_memory_scope_id",
+        "mem0_projection_event_id",
         "mem0_entity_id",
         "mem0_entity_scope_key",
         "mem0_assertion_id",
@@ -79,6 +93,47 @@ NEO4J_SCHEMA_OBJECT_NAMES = frozenset(
         "mem0_assertion_scope_state",
     }
 )
+
+READ_PROJECTION_EVENT_QUERY = """
+MATCH (event:ProjectionEvent {event_id: $event_id})
+RETURN
+    event.event_id AS event_id,
+    event.operation AS operation,
+    event.collection_name AS collection_name,
+    event.scope_key AS scope_key,
+    event.memory_id AS memory_id,
+    event.memory_hash AS memory_hash,
+    event.previous_hash AS previous_hash,
+    event.source_kind AS source_kind,
+    event.occurred_at AS occurred_at,
+    event.payload_hash AS payload_hash
+"""
+
+RECORD_PROJECTION_EVENT_QUERY = """
+CREATE (event:ProjectionEvent {
+    event_id: $event_id,
+    operation: $operation,
+    collection_name: $collection_name,
+    scope_key: $scope_key,
+    memory_id: $memory_id,
+    memory_hash: $memory_hash,
+    previous_hash: $previous_hash,
+    source_kind: $source_kind,
+    occurred_at: $occurred_at,
+    payload_hash: $payload_hash,
+    applied_at: $applied_at
+})
+WITH event
+OPTIONAL MATCH (memory:Mem0Memory {
+    collection_name: $collection_name,
+    scope_key: $scope_key,
+    memory_id: $memory_id
+})
+FOREACH (target IN CASE WHEN memory IS NULL THEN [] ELSE [memory] END |
+    MERGE (event)-[:FOR_MEMORY]->(target)
+)
+RETURN event.event_id AS event_id
+"""
 
 PROJECT_RELATIONSHIP_QUERY = """
 MERGE (memory:Mem0Memory {
@@ -509,6 +564,86 @@ class Neo4jSchemaAdapter:
             result = session.execute_write(self._delete_memory, parameters)
         return GraphLifecycleMutation.model_validate(result)
 
+    def apply(self, event: ProjectionEvent) -> ProjectionEventApplication:
+        """Apply one outbox event and its graph ledger record in one transaction."""
+        if self._closed:
+            raise RuntimeError("cannot apply a projection event with a closed Neo4j adapter")
+        payload = event.payload
+        if event.intent.operation is ProjectionEventOperation.DELETE:
+            if payload not in (None, ProjectionEventPayload()):
+                raise ValueError("DELETE projection events require an empty payload")
+        elif payload is None or not all((payload.excerpt_hash, payload.extractor_name, payload.extractor_version)):
+            raise ValueError("UPSERT and UPDATE projection events require extraction provenance")
+
+        with self._driver.session(database=self.config.database) as session:
+            result = session.execute_write(self._apply_projection_event, event)
+        return ProjectionEventApplication.model_validate(result)
+
+    @classmethod
+    def _apply_projection_event(
+        cls,
+        transaction: Neo4jTransaction,
+        event: ProjectionEvent,
+    ) -> Mapping[str, Any]:
+        ledger_parameters = _projection_event_parameters(event)
+        existing = transaction.run(READ_PROJECTION_EVENT_QUERY.strip(), event_id=event.intent.event_id).single()
+        if existing is not None:
+            if not _same_projection_event(existing, ledger_parameters):
+                raise ProjectionConflictError("projection event ID already identifies a different graph mutation")
+            return {
+                "event_id": event.intent.event_id,
+                "operation": event.intent.operation.value,
+                "already_applied": True,
+            }
+
+        intent = event.intent
+        payload = event.payload
+        if intent.operation is ProjectionEventOperation.DELETE:
+            parameters = {
+                **_provenance_scope_parameters(intent.collection_name, intent.scope),
+                "memory_id": intent.memory_id,
+                "memory_hash": intent.memory_hash,
+                "deleted_at": _isoformat(intent.occurred_at),
+            }
+            cls._delete_memory(transaction, parameters)
+        else:
+            if payload is None or payload.excerpt_hash is None:
+                raise ValueError("projection event extraction provenance is missing")
+            source = ProjectionSource(
+                collection_name=intent.collection_name,
+                scope=intent.scope,
+                memory_id=intent.memory_id,
+                memory_hash=intent.memory_hash,
+                excerpt_hash=payload.excerpt_hash,
+                source_kind=intent.source_kind,
+                projection_method=ProjectionMethod.LIVE,
+                extractor_name=payload.extractor_name,
+                extractor_version=payload.extractor_version,
+                model_id=payload.model_id,
+                recorded_at=intent.occurred_at,
+            )
+            parameter_batch = [_projection_parameters(relationship, source) for relationship in payload.relationships]
+            if intent.operation is ProjectionEventOperation.UPDATE:
+                parameters = {
+                    **_provenance_scope_parameters(intent.collection_name, intent.scope),
+                    "memory_id": intent.memory_id,
+                    "previous_hash": intent.previous_hash,
+                    "memory_hash": intent.memory_hash,
+                    "recorded_at": _isoformat(intent.occurred_at),
+                }
+                cls._replace_relationships(transaction, parameters, parameter_batch)
+            else:
+                cls._project_relationships(transaction, parameter_batch)
+
+        recorded = transaction.run(RECORD_PROJECTION_EVENT_QUERY.strip(), **ledger_parameters).single()
+        if recorded is None:
+            raise RuntimeError("Neo4j did not record the applied projection event")
+        return {
+            "event_id": event.intent.event_id,
+            "operation": event.intent.operation.value,
+            "already_applied": False,
+        }
+
     @classmethod
     def _project_relationships(
         cls,
@@ -800,6 +935,45 @@ def _projection_parameters(
 def _provenance_scope_parameters(collection_name: str, scope: GraphScope) -> dict[str, str]:
     normalized_collection = _require_non_empty(collection_name, "collection_name")
     return {"collection_name": normalized_collection, "scope_key": scope.key}
+
+
+def _projection_event_parameters(event: ProjectionEvent) -> dict[str, Any]:
+    intent = event.intent
+    canonical_payload = json.dumps(
+        None if event.payload is None else event.payload.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return {
+        "event_id": intent.event_id,
+        "operation": intent.operation.value,
+        "collection_name": intent.collection_name,
+        "scope_key": intent.scope.key,
+        "memory_id": intent.memory_id,
+        "memory_hash": intent.memory_hash,
+        "previous_hash": intent.previous_hash,
+        "source_kind": intent.source_kind.value,
+        "occurred_at": _isoformat(intent.occurred_at),
+        "payload_hash": hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest(),
+        "applied_at": _isoformat(datetime.now(timezone.utc)),
+    }
+
+
+def _same_projection_event(existing: Mapping[str, Any], parameters: Mapping[str, Any]) -> bool:
+    immutable_fields = (
+        "event_id",
+        "operation",
+        "collection_name",
+        "scope_key",
+        "memory_id",
+        "memory_hash",
+        "previous_hash",
+        "source_kind",
+        "occurred_at",
+        "payload_hash",
+    )
+    return all(existing[field] == parameters[field] for field in immutable_fields)
 
 
 def _require_non_empty(value: str, field_name: str) -> str:

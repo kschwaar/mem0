@@ -355,11 +355,11 @@ yields no graph assertions, while canonical memory remains unchanged.
 V3 updates are explicit `Memory.update()` calls. When text changes:
 
 1. Write the canonical vector update and normal history event.
-2. Emit a `REMOVE_EVIDENCE(memory_id, previous_hash)` intent followed by an
-   `UPSERT_ASSERTIONS(memory_id, new_hash)` intent.
-3. Projector hard-deletes evidence attached to the old hash; an assertion
+2. Complete and publish one `UPDATE(memory_id, previous_hash, new_hash)` event
+   containing the fully validated replacement assertions.
+3. The projector atomically changes the graph memory version, projects the new
+   assertions and hard-deletes evidence attached to the old hash; an assertion
    becomes `RETRACTED` only if it has no remaining evidence.
-4. Extract and project assertions for the new text.
 
 The assertion node is retained as retracted when it loses all evidence. An
 assertion independently supported by another memory remains active. This is the
@@ -572,7 +572,7 @@ begins; it is not necessary to settle later behavior while proving the schema.
 | D4 | Provisional | Can graph results expand search candidates? | Initially rerank semantic candidates only. Graph-only candidate expansion requires separate retrieval evaluation. | Retrieval slice |
 | D5 | Accepted for slice 3 | What happens on deletion? | The initial lifecycle slice hard-deletes evidence for deleted memories and retracts unsupported assertions. Historical retention can be added only with an explicit privacy policy. | Lifecycle slice |
 | D6 | Accepted for slice 1 | What Neo4j deployment is supported? | Neo4j Community 5.x in Docker is the development and integration-test baseline. Enterprise-only constraints are not required. | First slice |
-| D7 | Provisional | How are projection events processed? | No outbox in the first slice. Projection is an explicit operation. Before live write hooks are added, choose and test a durable SQLite outbox with a `ProjectionEvent` ledger. | Live-write slice |
+| D7 | Accepted for slice 4 | How are projection events processed? | Use a durable SQLite state machine (`PENDING`, `READY`, `PROCESSING`, `RETRY`, `APPLIED`, `DEAD_LETTER`) with expiring worker leases and bounded exponential retry. Record a unique `ProjectionEvent` node in the same Neo4j transaction as its graph mutation so lease expiry and duplicate delivery are safe. | Live-write slice |
 
 Decisions are promoted from provisional to accepted when the named slice begins.
 Changing a decision requires updating this table and any affected tests; a
@@ -647,5 +647,32 @@ retains a graph tombstone, and likewise retracts only unsupported assertions.
 Assertions with independent evidence remain active. Raw canonical memory text
 is used only by the extractor and is never sent to Neo4j. Stale hashes, wrong
 scopes, and missing targets fail before mutation. Durable ordering relative to
-canonical update/delete operations remains the responsibility of the next
-SQLite outbox slice.
+canonical update/delete operations was deferred to the SQLite outbox slice
+described below.
+
+### 12.4 Fourth-slice implementation record
+
+The durable live-projection subsystem is implemented without enabling graph
+reads or changing normal `Memory` writes. A producer persists immutable event
+intent before extraction and marks it ready only with a completely validated
+relationship payload. Canonical memory text is transient: SQLite retains the
+derived relationships and excerpt hash but not the text or raw model output.
+Delete events carry no extraction payload.
+
+SQLite owns crash-safe status transitions, atomic claims, expiring leases,
+bounded exponential retry, dead-letter and replay operations, filtered event
+inspection, and privacy-safe queue statistics. The worker performs one bounded
+claim per invocation, allowing applications to choose their own thread or
+process lifecycle.
+
+Neo4j records a unique `ProjectionEvent` in the same managed transaction as
+each UPSERT, UPDATE, or DELETE mutation. Redelivery after a process crash is
+therefore observable as already applied and does not repeat the graph mutation;
+reuse of an event ID for a different immutable mutation fails closed. The graph
+ledger stores identifiers, hashes, scope key, source kind and timestamps, not
+the relationship payload or canonical memory text.
+
+This slice exposes an explicit enqueue boundary but does not yet call it from
+`Memory.add()`, `Memory.update()`, or deletion methods. Integrating those hooks
+requires choosing the exact ordering around existing vector/history writes;
+the outbox cannot make those separate stores one distributed transaction.

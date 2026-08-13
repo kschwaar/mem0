@@ -5,14 +5,36 @@ MEM0_TEST_NEO4J_PASSWORD to run this test against a disposable database.
 """
 
 import os
+from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 
 from mem0.graphs.extractors import ExtractorIdentity, ValidatedRelationshipExtractor
-from mem0.graphs.models import GraphMemoryState, ProjectionSource, RelationshipCandidate, SourceKind, excerpt_sha256
-from mem0.graphs.neo4j import NEO4J_SCHEMA_OBJECT_NAMES, Neo4jGraphConfig, Neo4jSchemaAdapter, ProjectionConflictError
-from mem0.graphs.service import MemoryGraphProjectionRequest, MemoryGraphProjectionService
-
+from mem0.graphs.models import (
+    GraphMemoryState,
+    ProjectionSource,
+    RelationshipCandidate,
+    SourceKind,
+    excerpt_sha256,
+)
+from mem0.graphs.neo4j import (
+    NEO4J_SCHEMA_OBJECT_NAMES,
+    Neo4jGraphConfig,
+    Neo4jSchemaAdapter,
+    ProjectionConflictError,
+)
+from mem0.graphs.outbox import (
+    ProjectionEvent,
+    ProjectionEventIntent,
+    ProjectionEventOperation,
+    ProjectionEventPayload,
+    ProjectionEventStatus,
+)
+from mem0.graphs.service import (
+    MemoryGraphProjectionRequest,
+    MemoryGraphProjectionService,
+)
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MEM0_TEST_NEO4J_URI"),
@@ -163,6 +185,74 @@ def test_manual_vertical_slice_against_neo4j_5():
     assert first.provenance[0].memory_id == request.memory_id
 
 
+def test_live_projection_event_ledger_prevents_duplicate_delivery_against_neo4j_5():
+    pytest.importorskip("neo4j")
+    graph_config = Neo4jGraphConfig(
+        uri=os.environ["MEM0_TEST_NEO4J_URI"],
+        username=os.environ.get("MEM0_TEST_NEO4J_USERNAME", "neo4j"),
+        password=os.environ["MEM0_TEST_NEO4J_PASSWORD"],
+        database=os.environ.get("MEM0_TEST_NEO4J_DATABASE", "neo4j"),
+    )
+    unique = str(uuid4())
+    now = datetime.now(timezone.utc)
+    projection_event = ProjectionEvent(
+        intent=ProjectionEventIntent(
+            event_id=f"event-{unique}",
+            operation=ProjectionEventOperation.UPSERT,
+            collection_name=f"outbox-integration-{unique}",
+            scope={"user_id": "outbox-user"},
+            memory_id="outbox-memory",
+            memory_hash="hash-1",
+            source_kind=SourceKind.USER,
+            occurred_at=now,
+        ),
+        status=ProjectionEventStatus.PROCESSING,
+        payload=ProjectionEventPayload(
+            relationships=(
+                RelationshipCandidate(
+                    subject={"text": "Alice", "semantic_type": "PERSON"},
+                    predicate="works_at",
+                    object={"text": "Acme", "semantic_type": "ORG"},
+                    confidence=0.91,
+                ),
+            ),
+            excerpt_hash=excerpt_sha256("Alice works at Acme"),
+            extractor_name="integration-static",
+            extractor_version="1",
+        ),
+        attempts=1,
+        available_at=now,
+        lease_owner="integration-worker",
+        lease_expires_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+    with Neo4jSchemaAdapter.connect(graph_config) as adapter:
+        adapter.bootstrap_schema()
+        first = adapter.apply(projection_event)
+        duplicate = adapter.apply(projection_event)
+
+        with adapter._driver.session(database=graph_config.database) as session:
+            counts = session.run(
+                """
+                MATCH (event:ProjectionEvent {event_id: $event_id})
+                MATCH (memory:Mem0Memory {collection_name: $collection_name})
+                OPTIONAL MATCH (assertion:RelationshipAssertion)-[:SUPPORTED_BY]->(evidence:Evidence)
+                      -[:FROM_MEMORY]->(memory)
+                RETURN count(DISTINCT event) AS events,
+                       count(DISTINCT assertion) AS assertions,
+                       count(DISTINCT evidence) AS evidence
+                """,
+                event_id=projection_event.intent.event_id,
+                collection_name=projection_event.intent.collection_name,
+            ).single()
+
+    assert first.already_applied is False
+    assert duplicate.already_applied is True
+    assert dict(counts) == {"events": 1, "assertions": 1, "evidence": 1}
+
+
 def test_memory_inspection_classifies_normal_and_malformed_records_against_neo4j_5():
     pytest.importorskip("neo4j")
     graph_config = Neo4jGraphConfig(
@@ -186,6 +276,7 @@ def test_memory_inspection_classifies_normal_and_malformed_records_against_neo4j
         subject={"text": "Alice", "semantic_type": "PERSON"},
         predicate="works_at",
         object={"text": "Acme", "semantic_type": "ORG"},
+        confidence=0.9,
     )
 
     with Neo4jSchemaAdapter.connect(graph_config) as adapter:
