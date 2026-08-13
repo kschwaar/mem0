@@ -28,6 +28,7 @@ from mem0.graphs.extractors import (
     StructuredRelationshipBackend,
     ValidatedRelationshipExtractor,
 )
+from mem0.graphs.hooks import RelationshipGraphWriteHook
 from mem0.graphs.lifecycle import (
     GraphMemoryDeleteRequest,
     GraphMemoryUpdateRequest,
@@ -132,6 +133,7 @@ __all__ = [
     "GraphMemoryUpdateResult",
     "RelationshipGraphLifecycleAdapter",
     "RelationshipGraphLifecycleService",
+    "RelationshipGraphWriteHook",
     "EntityReference",
     "GraphLifecycleMutation",
     "GraphScope",

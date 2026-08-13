@@ -490,19 +490,26 @@ class ProjectionEventProducer:
         self._outbox = outbox
         self._extractor = extractor
 
-    def enqueue(self, intent: ProjectionEventIntent, *, memory_text: Optional[str] = None) -> ProjectionEvent:
-        """Persist intent before extraction, then publish only a fully validated payload."""
-        if intent.operation is ProjectionEventOperation.DELETE and memory_text is not None:
-            raise ValueError("DELETE events do not accept memory text")
-        if intent.operation is not ProjectionEventOperation.DELETE and memory_text is None:
-            raise ValueError("UPSERT and UPDATE events require memory text")
-        pending = self._outbox.create_pending(intent)
+    def prepare(self, intent: ProjectionEventIntent) -> ProjectionEvent:
+        """Durably record mutation intent before the canonical store changes."""
+        return self._outbox.create_pending(intent)
+
+    def publish(self, event_id: str, *, memory_text: Optional[str] = None) -> ProjectionEvent:
+        """Extract and publish a prepared event after the canonical mutation commits."""
+        pending = self._outbox.get(event_id)
+        if pending is None:
+            raise KeyError(event_id)
         if pending.status is not ProjectionEventStatus.PENDING:
             return pending
-        if intent.operation is ProjectionEventOperation.DELETE:
-            return self._outbox.mark_ready(intent.event_id, ProjectionEventPayload())
 
-        assert memory_text is not None
+        intent = pending.intent
+        if intent.operation is ProjectionEventOperation.DELETE:
+            if memory_text is not None:
+                raise ValueError("DELETE events do not accept memory text")
+            return self._outbox.mark_ready(intent.event_id, ProjectionEventPayload())
+        if memory_text is None:
+            raise ValueError("UPSERT and UPDATE events require memory text")
+
         relationships = tuple(self._extractor.extract(memory_text))
         identity = self._extractor.identity
         payload = ProjectionEventPayload(
@@ -513,6 +520,15 @@ class ProjectionEventProducer:
             model_id=identity.model_id,
         )
         return self._outbox.mark_ready(intent.event_id, payload)
+
+    def enqueue(self, intent: ProjectionEventIntent, *, memory_text: Optional[str] = None) -> ProjectionEvent:
+        """Persist intent before extraction, then publish only a fully validated payload."""
+        if intent.operation is ProjectionEventOperation.DELETE and memory_text is not None:
+            raise ValueError("DELETE events do not accept memory text")
+        if intent.operation is not ProjectionEventOperation.DELETE and memory_text is None:
+            raise ValueError("UPSERT and UPDATE events require memory text")
+        self.prepare(intent)
+        return self.publish(intent.event_id, memory_text=memory_text)
 
 
 class ProjectionOutboxWorker:

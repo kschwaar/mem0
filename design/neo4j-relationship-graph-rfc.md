@@ -590,8 +590,10 @@ After approval, implementation should proceed in reviewable slices:
 3. Update/delete lifecycle behavior and privacy tests.
 4. SQLite outbox and live-write projector, with graph reads still disabled in
    normal search.
-5. Read-only explanation API and semantic-candidate reranking.
-6. Only after retrieval evaluation, consider graph-only candidate expansion and
+5. Opt-in sync and async `Memory` write hooks using the two-phase outbox
+   boundary, still with graph reads disabled.
+6. Read-only explanation API and semantic-candidate reranking.
+7. Only after retrieval evaluation, consider graph-only candidate expansion and
    measured score boosting.
 
 The first slice is complete when one integration test demonstrates all of the
@@ -676,3 +678,32 @@ This slice exposes an explicit enqueue boundary but does not yet call it from
 `Memory.add()`, `Memory.update()`, or deletion methods. Integrating those hooks
 requires choosing the exact ordering around existing vector/history writes;
 the outbox cannot make those separate stores one distributed transaction.
+
+### 12.5 Fifth-slice implementation record
+
+Normal sync and async memory mutations can now opt into the durable outbox by
+passing a `RelationshipGraphWriteHook` to the `Memory` or `AsyncMemory`
+constructor. The default remains `None`, so existing initialization, writes,
+search behavior and dependencies are unchanged, with no graph I/O or extraction
+latency.
+
+For ADD, text-changing UPDATE and DELETE operations, the hook writes a PENDING
+intent before the canonical vector mutation. It publishes the event only after
+the vector and history writes succeed. Publishing performs relationship
+extraction for ADD/UPDATE and moves the event to READY; DELETE publishes an
+empty payload. `delete_all()` inherits the per-memory DELETE behavior. Metadata-
+only updates emit no graph event. `reset()` remains deliberately unsupported
+until namespace reset semantics and explicit opt-in are implemented.
+
+Hook preparation and publication failures never fail the canonical memory
+operation. Errors expose only the exception type, not its message or payload;
+failed publication leaves the durable PENDING intent visible for reconciliation.
+This is not a distributed transaction: a process can still stop between a
+canonical store write and the READY transition, but it cannot silently lose the
+pre-written intent. Sync and async paths use the same event contract, and async
+hook work runs outside the event loop.
+
+The hook does not start a background worker or enable graph retrieval. Operators
+retain control over projector lifecycle. An existing collection should be
+backfilled before enabling live UPDATE/DELETE projection because those events
+intentionally require the prior graph memory hash to exist.
