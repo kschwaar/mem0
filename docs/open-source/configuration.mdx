@@ -97,6 +97,10 @@ export COHERE_API_KEY="..."   # Python reranker only
   The TypeScript OSS SDK configures the LLM, embedder, vector store, and history store. Reranker and graph memory are Python-only today.
 </Note>
 
+<Tip>
+  Python relationship graph support is default-off and currently a preview. See the <Link href="/open-source/features/relationship-graph-preview">relationship graph guide</Link> for Neo4j configuration, projection operations, reset behavior, and the retrieval quality gate.
+</Tip>
+
 Prefer a config file? Load YAML into Python's `from_config`:
 
 ```python

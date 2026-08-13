@@ -1,0 +1,29 @@
+[
+  {
+    "query": "Where does Alice work?",
+    "candidates": [
+      {"id": "tea", "semantic_score": 0.86, "graph_score": 0.0},
+      {"id": "acme", "semantic_score": 0.82, "graph_score": 0.95},
+      {"id": "travel", "semantic_score": 0.74, "graph_score": 0.0}
+    ],
+    "relevant_ids": ["acme"]
+  },
+  {
+    "query": "Who manages the Atlas project?",
+    "candidates": [
+      {"id": "deadline", "semantic_score": 0.88, "graph_score": 0.1},
+      {"id": "manager", "semantic_score": 0.80, "graph_score": 1.0},
+      {"id": "budget", "semantic_score": 0.77, "graph_score": 0.0}
+    ],
+    "relevant_ids": ["manager"]
+  },
+  {
+    "query": "What city does Bob live in?",
+    "candidates": [
+      {"id": "address", "semantic_score": 0.91, "graph_score": 0.9},
+      {"id": "hobby", "semantic_score": 0.84, "graph_score": 0.0},
+      {"id": "food", "semantic_score": 0.79, "graph_score": 0.0}
+    ],
+    "relevant_ids": ["address"]
+  }
+]

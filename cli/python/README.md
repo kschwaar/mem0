@@ -219,6 +219,22 @@ Explicitly project existing OSS memories into the optional Neo4j relationship
 graph. The Memory configuration file selects the canonical vector store and LLM;
 the command never changes canonical memories.
 
+### Graph preview operations
+
+Use the first-class `relationship_graph` section in the Memory JSON config for
+bounded projection administration:
+
+```bash
+mem0 graph status --memory-config memory.json --output json
+mem0 graph drain --memory-config memory.json --limit 100
+mem0 graph reconcile --memory-config memory.json --limit 100
+mem0 graph replay <event-id> --memory-config memory.json
+mem0 graph reset --memory-config memory.json --yes
+```
+
+Reset is collection-scoped and requires explicit confirmation. Status output
+contains queue counts and lag, not memory content.
+
 ```bash
 export MEM0_GRAPH_NEO4J_URI=neo4j://localhost:7687
 export MEM0_GRAPH_NEO4J_USERNAME=neo4j

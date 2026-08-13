@@ -13,6 +13,13 @@ from mem0.graphs.backfill import (
     JsonBackfillCheckpointStore,
     RelationshipGraphBackfillRunner,
 )
+from mem0.graphs.benchmark import (
+    RetrievalBenchmarkCandidate,
+    RetrievalBenchmarkCase,
+    RetrievalBenchmarkMetrics,
+    RetrievalBenchmarkResult,
+    run_retrieval_benchmark,
+)
 from mem0.graphs.composition import (
     CanonicalMemorySource,
     RelationshipGraphBackfill,
@@ -123,6 +130,11 @@ from mem0.graphs.runtime import RelationshipGraphRuntime
 
 __all__ = [
     "BackfillCheckpoint",
+    "RetrievalBenchmarkCandidate",
+    "RetrievalBenchmarkCase",
+    "RetrievalBenchmarkMetrics",
+    "RetrievalBenchmarkResult",
+    "run_retrieval_benchmark",
     "BackfillFailure",
     "BackfillFailureStage",
     "BackfillRunRequest",
