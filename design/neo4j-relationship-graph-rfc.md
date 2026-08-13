@@ -518,8 +518,11 @@ the process stops before checkpoint replacement, preflight reconciliation sees
 the projection as `CURRENT` on resume. Deterministic graph identities prevent
 duplicates. The initial runner continues after per-memory extraction,
 projection, verification and reconciliation failures; a page-read failure is
-checkpointed and ends that invocation. Automatic repair, deletion, concurrency,
-a real vector-store reader and a user-facing CLI are later pieces.
+checkpointed and ends that invocation. The first vector-store reader takes a
+bounded exact-scope snapshot, normalizes provider list results, orders memories
+by ID and fails closed on malformed, duplicate, mismatched-scope or truncated
+records. Automatic repair, deletion, concurrency and a user-facing CLI are
+later pieces.
 
 ## 9. Security and privacy requirements
 

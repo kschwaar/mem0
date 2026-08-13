@@ -49,6 +49,13 @@ from mem0.graphs.neo4j import (
     Neo4jSchemaAdapter,
     ProjectionConflictError,
 )
+from mem0.graphs.readers import (
+    CanonicalMemoryReadError,
+    CanonicalMemoryRecordError,
+    CanonicalMemorySnapshotLimitError,
+    VectorStoreCanonicalMemoryReader,
+    VectorStoreListProvider,
+)
 from mem0.graphs.service import (
     MemoryGraphProjectionRequest,
     MemoryGraphProjectionResult,
@@ -94,6 +101,11 @@ __all__ = [
     "Neo4jGraphConfig",
     "Neo4jSchemaAdapter",
     "ProjectionConflictError",
+    "CanonicalMemoryReadError",
+    "CanonicalMemoryRecordError",
+    "CanonicalMemorySnapshotLimitError",
+    "VectorStoreCanonicalMemoryReader",
+    "VectorStoreListProvider",
     "MemoryGraphProjectionRequest",
     "MemoryGraphProjectionResult",
     "MemoryGraphProjectionService",
