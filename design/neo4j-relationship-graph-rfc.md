@@ -707,3 +707,33 @@ The hook does not start a background worker or enable graph retrieval. Operators
 retain control over projector lifecycle. An existing collection should be
 backfilled before enabling live UPDATE/DELETE projection because those events
 intentionally require the prior graph memory hash to exist.
+
+### 12.6 Sixth-slice implementation record
+
+Opt-in read-only graph reranking is implemented for sync and async search by
+passing a `RelationshipGraphSearch` to the `Memory` or `AsyncMemory`
+constructor. The default remains `None`, preserving the existing search path and
+response shape. Graph-only candidate expansion remains disabled.
+
+The search first builds its normal bounded semantic candidate pool. Query
+entities are normalized and deduplicated, then Neo4j is asked only about a
+configured prefix of those candidate memory IDs in the exact collection and
+complete scope. The one-hop query accepts only ACTIVE assertions, current
+evidence whose hash matches the graph memory, and non-deleted graph memories.
+It aggregates the maximum supporting confidence per assertion and returns at
+most the configured number of compact explanations per candidate.
+
+The graph component is `graph_weight * graph_score` and participates in the
+same normalized additive ranking as semantic, BM25, and existing entity signals.
+The semantic threshold still gates every candidate before any graph signal is
+applied. With `explain=True`, graph-enabled results include the component values
+in `score_details` and a `graph_explanations` list containing subject,
+predicate, object, assertion ID, and confidence. The list never contains raw
+memory text, evidence excerpts, or graph credentials.
+
+Graph lookup failure is non-fatal and exposes only the exception type in logs;
+search returns the baseline ranking and baseline explanation shape. The async
+path performs the blocking graph lookup outside the event loop. This slice does
+not impose a driver-level timeout yet, so production enablement still requires
+a Neo4j driver configured with an appropriate transaction timeout and the
+offline retrieval evaluation described below.

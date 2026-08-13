@@ -64,6 +64,9 @@ def score_and_rank(
     threshold: float,
     top_k: int,
     explain: bool = False,
+    graph_scores: Optional[Dict[str, float]] = None,
+    graph_weight: float = 0.0,
+    graph_explanations: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> List[Dict[str, Any]]:
     """Score candidates additively and return top-k results.
 
@@ -87,18 +90,26 @@ def score_and_rank(
         threshold: Minimum semantic score required before hybrid scoring.
         top_k: Maximum number of results to return.
         explain: Include score_details in each result when true.
+        graph_scores: Optional relationship-graph confidence keyed by semantic candidate ID.
+        graph_weight: Maximum additive relationship-graph contribution.
+        graph_explanations: Optional compact graph explanations keyed by candidate ID.
 
     Returns:
         List of scored result dicts sorted by combined score descending.
     """
     has_bm25 = bool(bm25_scores)
     has_entity = bool(entity_boosts)
+    graph_scores = graph_scores or {}
+    graph_explanations = graph_explanations or {}
+    has_graph = bool(graph_scores) and graph_weight > 0
 
     max_possible = 1.0
     if has_bm25:
         max_possible += 1.0
     if has_entity:
         max_possible += ENTITY_BOOST_WEIGHT
+    if has_graph:
+        max_possible += graph_weight
 
     scored: List[Dict[str, Any]] = []
 
@@ -114,8 +125,10 @@ def score_and_rank(
         mem_id_str = str(mem_id)
         bm25_score = bm25_scores.get(mem_id_str, 0.0)
         entity_boost = entity_boosts.get(mem_id_str, 0.0)
+        graph_score = graph_scores.get(mem_id_str, 0.0)
 
-        raw_combined = semantic_score + bm25_score + entity_boost
+        graph_boost = graph_weight * graph_score if has_graph else 0.0
+        raw_combined = semantic_score + bm25_score + entity_boost + graph_boost
         combined = min(raw_combined / max_possible, 1.0)
 
         scored_result = {
@@ -124,7 +137,7 @@ def score_and_rank(
             "payload": result.get("payload"),
         }
         if explain:
-            scored_result["score_details"] = {
+            score_details = {
                 "semantic_score": semantic_score,
                 "bm25_score": bm25_score,
                 "entity_boost": entity_boost,
@@ -133,6 +146,17 @@ def score_and_rank(
                 "final_score": combined,
                 "threshold": threshold,
             }
+            if has_graph:
+                score_details.update(
+                    {
+                        "graph_score": graph_score,
+                        "graph_weight": graph_weight,
+                        "graph_boost": graph_boost,
+                    }
+                )
+            scored_result["score_details"] = score_details
+            if mem_id_str in graph_explanations:
+                scored_result["graph_explanations"] = graph_explanations[mem_id_str]
         scored.append(scored_result)
 
     scored.sort(key=lambda x: x["score"], reverse=True)

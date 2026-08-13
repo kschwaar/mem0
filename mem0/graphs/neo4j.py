@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from mem0.graphs.models import (
+    EntityReference,
     GraphLifecycleMutation,
     GraphMemoryState,
     GraphScope,
@@ -32,6 +33,7 @@ from mem0.graphs.outbox import (
     ProjectionEventOperation,
     ProjectionEventPayload,
 )
+from mem0.graphs.retrieval import GraphCandidateSignal, GraphSearchExplanation
 
 NEO4J_SCHEMA_STATEMENTS = (
     """
@@ -133,6 +135,63 @@ FOREACH (target IN CASE WHEN memory IS NULL THEN [] ELSE [memory] END |
     MERGE (event)-[:FOR_MEMORY]->(target)
 )
 RETURN event.event_id AS event_id
+"""
+
+READ_CANDIDATE_SIGNALS_QUERY = """
+UNWIND $candidate_memory_ids AS candidate_memory_id
+CALL {
+    WITH candidate_memory_id
+    MATCH (subject:Mem0Entity)-[:SUBJECT_OF]->(assertion:RelationshipAssertion)
+          -[:OBJECT_OF]->(object:Mem0Entity)
+    WHERE assertion.collection_name = $collection_name
+      AND assertion.scope_key = $scope_key
+      AND assertion.state = 'ACTIVE'
+      AND subject.collection_name = $collection_name
+      AND subject.scope_key = $scope_key
+      AND object.collection_name = $collection_name
+      AND object.scope_key = $scope_key
+      AND any(query_entity IN $query_entities WHERE
+          (subject.normalized_name = query_entity.normalized_name
+           AND subject.semantic_type = query_entity.semantic_type)
+          OR
+          (object.normalized_name = query_entity.normalized_name
+           AND object.semantic_type = query_entity.semantic_type)
+      )
+    MATCH (assertion)-[:SUPPORTED_BY]->(evidence:Evidence)-[:FROM_MEMORY]->(memory:Mem0Memory)
+    WHERE memory.collection_name = $collection_name
+      AND memory.scope_key = $scope_key
+      AND memory.memory_id = candidate_memory_id
+      AND memory.deleted_at IS NULL
+      AND evidence.memory_hash = memory.memory_hash
+    WITH
+        memory.memory_id AS memory_id,
+        assertion,
+        subject,
+        object,
+        max(evidence.confidence) AS confidence
+    ORDER BY confidence DESC, assertion.assertion_id ASC
+    LIMIT $explanation_limit
+    RETURN memory_id, assertion, subject, object, confidence
+}
+RETURN
+    memory_id,
+    assertion.assertion_id AS assertion_id,
+    {
+        entity_id: subject.entity_id,
+        normalized_name: subject.normalized_name,
+        display_name: subject.display_name,
+        semantic_type: subject.semantic_type
+    } AS subject,
+    assertion.predicate AS predicate,
+    assertion.predicate_display AS predicate_display,
+    {
+        entity_id: object.entity_id,
+        normalized_name: object.normalized_name,
+        display_name: object.display_name,
+        semantic_type: object.semantic_type
+    } AS object,
+    confidence
+ORDER BY memory_id ASC, confidence DESC, assertion_id ASC
 """
 
 PROJECT_RELATIONSHIP_QUERY = """
@@ -785,6 +844,58 @@ class Neo4jSchemaAdapter:
             },
         )
 
+    def candidate_signals(
+        self,
+        *,
+        collection_name: str,
+        scope: GraphScope,
+        query_entities: list[EntityReference],
+        candidate_memory_ids: list[str],
+        explanation_limit: int,
+    ) -> list[GraphCandidateSignal]:
+        """Return one-hop ACTIVE assertion signals for existing semantic candidates."""
+        if self._closed:
+            raise RuntimeError("cannot read candidate signals with a closed Neo4j adapter")
+        if not query_entities or not candidate_memory_ids:
+            return []
+        if explanation_limit < 1:
+            raise ValueError("explanation_limit must be positive")
+        parameters = {
+            **_provenance_scope_parameters(collection_name, scope),
+            "query_entities": [entity.identity_values() for entity in query_entities],
+            "candidate_memory_ids": list(dict.fromkeys(candidate_memory_ids)),
+            "explanation_limit": explanation_limit,
+        }
+        with self._driver.session(database=self.config.database) as session:
+            records = session.execute_read(self._run_candidate_signals_query, parameters)
+
+        grouped: dict[str, list[GraphSearchExplanation]] = {}
+        scores: dict[str, float] = {}
+        for record in records:
+            memory_id = str(record["memory_id"])
+            explanation = GraphSearchExplanation.model_validate(
+                {
+                    "assertion_id": record["assertion_id"],
+                    "subject": record["subject"],
+                    "predicate": record["predicate"],
+                    "predicate_display": record["predicate_display"],
+                    "object": record["object"],
+                    "confidence": record["confidence"],
+                }
+            )
+            explanations = grouped.setdefault(memory_id, [])
+            if len(explanations) < explanation_limit:
+                explanations.append(explanation)
+            scores[memory_id] = max(scores.get(memory_id, 0.0), explanation.confidence)
+        return [
+            GraphCandidateSignal(
+                memory_id=memory_id,
+                graph_score=scores[memory_id],
+                explanations=tuple(explanations),
+            )
+            for memory_id, explanations in grouped.items()
+        ]
+
     def inspect(
         self,
         *,
@@ -845,6 +956,13 @@ class Neo4jSchemaAdapter:
         parameters: Mapping[str, Any],
     ) -> list[Mapping[str, Any]]:
         return list(transaction.run(query.strip(), **parameters))
+
+    @staticmethod
+    def _run_candidate_signals_query(
+        transaction: Neo4jTransaction,
+        parameters: Mapping[str, Any],
+    ) -> list[Mapping[str, Any]]:
+        return list(transaction.run(READ_CANDIDATE_SIGNALS_QUERY.strip(), **parameters))
 
     @staticmethod
     def _run_inspection_query(

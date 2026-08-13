@@ -76,6 +76,7 @@ from mem0.vector_stores.base import VectorStoreBase
 
 if TYPE_CHECKING:
     from mem0.graphs.hooks import RelationshipGraphWriteHook
+    from mem0.graphs.retrieval import RelationshipGraphSearch
 
 # Suppress SWIG deprecation warnings globally
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*SwigPy.*")
@@ -500,15 +501,42 @@ class _RelationshipGraphWriteMixin:
             logger.warning("Graph projection event remains pending after publish failure (%s)", type(error).__name__)
 
 
-class Memory(_RelationshipGraphWriteMixin, MemoryBase):
+class _RelationshipGraphSearchMixin:
+    _relationship_graph_search: Optional["RelationshipGraphSearch"]
+    collection_name: str
+
+    def _relationship_graph_inputs(self, query_entities, filters, candidate_memory_ids):
+        if self._relationship_graph_search is None or not query_entities or not candidate_memory_ids:
+            return {}, {}, 0.0
+        try:
+            signals = self._relationship_graph_search.signals(
+                collection_name=self.collection_name,
+                filters=filters,
+                query_entities=query_entities,
+                candidate_memory_ids=candidate_memory_ids,
+            )
+        except Exception as error:
+            logger.warning("Relationship graph search unavailable (%s)", type(error).__name__)
+            return {}, {}, 0.0
+        scores = {memory_id: signal.graph_score for memory_id, signal in signals.items()}
+        explanations = {
+            memory_id: [explanation.model_dump(mode="json") for explanation in signal.explanations]
+            for memory_id, signal in signals.items()
+        }
+        return scores, explanations, self._relationship_graph_search.graph_weight
+
+
+class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, MemoryBase):
     def __init__(
         self,
         config: MemoryConfig = MemoryConfig(),
         *,
         graph_write_hook: Optional["RelationshipGraphWriteHook"] = None,
+        relationship_graph_search: Optional["RelationshipGraphSearch"] = None,
     ):
         self.config = config
         self._graph_write_hook = graph_write_hook
+        self._relationship_graph_search = relationship_graph_search
 
         self.embedding_model = EmbedderFactory.create(
             self.config.embedder.provider,
@@ -1714,6 +1742,12 @@ class Memory(_RelationshipGraphWriteMixin, MemoryBase):
                 }
             )
 
+        graph_scores, graph_explanations, graph_weight = self._relationship_graph_inputs(
+            query_entities,
+            filters,
+            [candidate["id"] for candidate in candidates],
+        )
+
         # Step 8: Score and rank
         scored_results = score_and_rank(
             semantic_results=candidates,
@@ -1722,6 +1756,9 @@ class Memory(_RelationshipGraphWriteMixin, MemoryBase):
             threshold=threshold,
             top_k=limit,
             explain=explain,
+            graph_scores=graph_scores,
+            graph_weight=graph_weight,
+            graph_explanations=graph_explanations if explain else None,
         )
 
         # Step 9: Format results
@@ -1772,6 +1809,8 @@ class Memory(_RelationshipGraphWriteMixin, MemoryBase):
                 memory_item_dict["metadata"].update(additional_metadata)
             if explain and "score_details" in scored:
                 memory_item_dict["score_details"] = scored["score_details"]
+            if explain and "graph_explanations" in scored:
+                memory_item_dict["graph_explanations"] = scored["graph_explanations"]
 
             original_memories.append(memory_item_dict)
 
@@ -2209,15 +2248,17 @@ class Memory(_RelationshipGraphWriteMixin, MemoryBase):
         raise NotImplementedError("Chat function not implemented yet.")
 
 
-class AsyncMemory(_RelationshipGraphWriteMixin, MemoryBase):
+class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, MemoryBase):
     def __init__(
         self,
         config: MemoryConfig = MemoryConfig(),
         *,
         graph_write_hook: Optional["RelationshipGraphWriteHook"] = None,
+        relationship_graph_search: Optional["RelationshipGraphSearch"] = None,
     ):
         self.config = config
         self._graph_write_hook = graph_write_hook
+        self._relationship_graph_search = relationship_graph_search
 
         self.embedding_model = EmbedderFactory.create(
             self.config.embedder.provider,
@@ -3414,6 +3455,13 @@ class AsyncMemory(_RelationshipGraphWriteMixin, MemoryBase):
                 }
             )
 
+        graph_scores, graph_explanations, graph_weight = await asyncio.to_thread(
+            self._relationship_graph_inputs,
+            query_entities,
+            filters,
+            [candidate["id"] for candidate in candidates],
+        )
+
         # Step 8: Score and rank
         scored_results = score_and_rank(
             semantic_results=candidates,
@@ -3422,6 +3470,9 @@ class AsyncMemory(_RelationshipGraphWriteMixin, MemoryBase):
             threshold=threshold,
             top_k=limit,
             explain=explain,
+            graph_scores=graph_scores,
+            graph_weight=graph_weight,
+            graph_explanations=graph_explanations if explain else None,
         )
 
         # Step 9: Format results
@@ -3471,6 +3522,8 @@ class AsyncMemory(_RelationshipGraphWriteMixin, MemoryBase):
                 memory_item_dict["metadata"].update(additional_metadata)
             if explain and "score_details" in scored:
                 memory_item_dict["score_details"] = scored["score_details"]
+            if explain and "graph_explanations" in scored:
+                memory_item_dict["graph_explanations"] = scored["graph_explanations"]
 
             original_memories.append(memory_item_dict)
 

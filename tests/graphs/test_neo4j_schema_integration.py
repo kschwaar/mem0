@@ -12,6 +12,7 @@ import pytest
 
 from mem0.graphs.extractors import ExtractorIdentity, ValidatedRelationshipExtractor
 from mem0.graphs.models import (
+    EntityReference,
     GraphMemoryState,
     ProjectionSource,
     RelationshipCandidate,
@@ -107,12 +108,31 @@ def test_relationship_projection_is_atomic_and_idempotent_against_neo4j_5():
             scope=source.scope.model_copy(update={"user_id": "another-user"}),
             memory_id=source.memory_id,
         )
+        candidate_signals = adapter.candidate_signals(
+            collection_name=source.collection_name,
+            scope=source.scope,
+            query_entities=[EntityReference(text="Alice", semantic_type="PERSON")],
+            candidate_memory_ids=[source.memory_id, "semantic-only-memory"],
+            explanation_limit=2,
+        )
+        wrong_scope_signals = adapter.candidate_signals(
+            collection_name=source.collection_name,
+            scope=source.scope.model_copy(update={"user_id": "another-user"}),
+            query_entities=[EntityReference(text="Alice", semantic_type="PERSON")],
+            candidate_memory_ids=[source.memory_id],
+            explanation_limit=2,
+        )
 
         assert by_assertion == by_memory
         assert len(by_assertion) == 1
         assert by_assertion[0].assertion_id == first.assertion_id
         assert by_assertion[0].memory_id == source.memory_id
         assert wrong_scope == []
+        assert len(candidate_signals) == 1
+        assert candidate_signals[0].memory_id == source.memory_id
+        assert candidate_signals[0].graph_score == relationship.confidence
+        assert candidate_signals[0].explanations[0].predicate == relationship.predicate
+        assert wrong_scope_signals == []
 
         with adapter._driver.session(database=graph_config.database) as session:
             record = session.run(

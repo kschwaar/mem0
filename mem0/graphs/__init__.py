@@ -63,6 +63,7 @@ from mem0.graphs.neo4j import (
     MARK_MEMORY_DELETED_QUERY,
     NEO4J_SCHEMA_STATEMENTS,
     PROJECT_RELATIONSHIP_QUERY,
+    READ_CANDIDATE_SIGNALS_QUERY,
     READ_PROJECTION_EVENT_QUERY,
     READ_PROVENANCE_BY_ASSERTION_QUERY,
     READ_PROVENANCE_BY_MEMORY_QUERY,
@@ -95,6 +96,12 @@ from mem0.graphs.readers import (
     CanonicalMemorySnapshotLimitError,
     VectorStoreCanonicalMemoryReader,
     VectorStoreListProvider,
+)
+from mem0.graphs.retrieval import (
+    GraphCandidateSignal,
+    GraphSearchExplanation,
+    RelationshipGraphCandidateAdapter,
+    RelationshipGraphSearch,
 )
 from mem0.graphs.service import (
     MemoryGraphProjectionRequest,
@@ -165,6 +172,7 @@ __all__ = [
     "MARK_MEMORY_DELETED_QUERY",
     "NEO4J_SCHEMA_STATEMENTS",
     "PROJECT_RELATIONSHIP_QUERY",
+    "READ_CANDIDATE_SIGNALS_QUERY",
     "READ_PROJECTION_EVENT_QUERY",
     "READ_PROVENANCE_BY_ASSERTION_QUERY",
     "READ_PROVENANCE_BY_MEMORY_QUERY",
@@ -180,6 +188,10 @@ __all__ = [
     "CanonicalMemorySnapshotLimitError",
     "VectorStoreCanonicalMemoryReader",
     "VectorStoreListProvider",
+    "GraphCandidateSignal",
+    "GraphSearchExplanation",
+    "RelationshipGraphCandidateAdapter",
+    "RelationshipGraphSearch",
     "MemoryGraphProjectionRequest",
     "MemoryGraphProjectionResult",
     "MemoryGraphProjectionService",
