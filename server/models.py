@@ -52,6 +52,27 @@ class RequestLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_new_uuid)
+    event: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="SUCCEEDED")
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    app_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    data: Mapped[str] = mapped_column(Text, default="{}")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+
+
 class RefreshTokenJti(Base):
     __tablename__ = "refresh_token_jtis"
 

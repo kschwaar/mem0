@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _api import api_url
 from _identity import resolve_api_key, resolve_user_id
 from _project import resolve_branch, resolve_project_id
 
@@ -39,7 +40,6 @@ if os.environ.get("MEM0_DEBUG"):
     except OSError:
         pass
 
-API_URL = "https://api.mem0.ai"
 TAIL_LINES = 200
 MAX_CONTENT_CHARS = 8000
 MIN_CONTENT_CHARS = 100
@@ -103,12 +103,13 @@ def extract_recent_exchanges(lines: list[str], max_exchanges: int = 3) -> list[d
     if not messages:
         return []
 
-    result = messages[-(max_exchanges * 2):]
+    result = messages[-(max_exchanges * 2) :]
     return result
 
 
-def store_exchange(api_key: str, messages: list[dict], user_id: str,
-                   project_id: str, branch: str, session_id: str) -> bool:
+def store_exchange(
+    api_key: str, messages: list[dict], user_id: str, project_id: str, branch: str, session_id: str
+) -> bool:
     metadata = {
         "type": "auto_capture",
         "source": "auto_capture",
@@ -129,7 +130,7 @@ def store_exchange(api_key: str, messages: list[dict], user_id: str,
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"{API_URL}/v3/memories/add/",
+        api_url("/v3/memories/add/"),
         data=data,
         headers={
             "Content-Type": "application/json",
@@ -141,8 +142,7 @@ def store_exchange(api_key: str, messages: list[dict], user_id: str,
         with urllib.request.urlopen(req, timeout=15) as resp:
             if resp.status in (200, 201):
                 result = json.loads(resp.read())
-                log.info("Auto-captured: event_id=%s status=%s",
-                         result.get("event_id", "?"), result.get("status", "?"))
+                log.info("Auto-captured: event_id=%s status=%s", result.get("event_id", "?"), result.get("status", "?"))
                 return True
             log.warning("API returned status %d", resp.status)
             return False
@@ -197,6 +197,7 @@ def main():
     if store_exchange(api_key, messages, user_id, project_id, branch, session_id):
         try:
             import session_stats
+
             session_stats.record_add("auto_capture")
         except Exception:
             pass

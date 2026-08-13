@@ -1,5 +1,6 @@
 fastapi==0.115.8
 uvicorn==0.34.0
+mcp[cli]>=1.25.4
 pydantic[email]==2.10.4
 mem0ai>=0.1.48
 python-dotenv==1.2.2
@@ -24,3 +25,10 @@ posthog>=3.0,<8.0
 
 # Per-IP rate limiting on auth endpoints
 slowapi>=0.1.9,<1.0
+
+# Optional local-memory Docker Compose profile: Qdrant sparse search,
+# Neo4j service connectivity, and local HuggingFace reranking.
+fastembed>=0.3.1
+neo4j>=5.0.0,<6.0.0
+transformers>=4.40.0
+torch>=2.0.0

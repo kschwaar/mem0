@@ -30,10 +30,10 @@ from _chunking import (
     split_by_headers,
     split_by_hr_or_headers,
 )
+from _api import api_url
 from _identity import resolve_api_key, resolve_user_id
 from _project import resolve_branch, resolve_project_id
 
-API_URL = "https://api.mem0.ai"
 HASH_STORE = os.path.expanduser("~/.mem0/import_hashes.json")
 
 
@@ -83,7 +83,7 @@ def post_memory(api_key: str, content: str, user_id: str, project_id: str, branc
     }
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"{API_URL}/v3/memories/add/",
+        api_url("/v3/memories/add/"),
         data=data,
         headers={
             "Content-Type": "application/json",
@@ -99,7 +99,9 @@ def post_memory(api_key: str, content: str, user_id: str, project_id: str, branc
         return False
 
 
-def import_chunks(chunks: list[str], api_key: str, user_id: str, project_id: str, branch: str, source: str, hash_key: str = "") -> int:
+def import_chunks(
+    chunks: list[str], api_key: str, user_id: str, project_id: str, branch: str, source: str, hash_key: str = ""
+) -> int:
     """Import a list of content chunks; return number of successful imports.
 
     Skips import if content hash matches a previous run for the same hash_key."""
@@ -137,7 +139,7 @@ def _parse_path_arg(args: list[str], flag: str, default: str) -> str:
         if arg == flag and i + 1 < len(args):
             return args[i + 1]
         if arg.startswith(f"{flag}="):
-            return arg[len(flag) + 1:]
+            return arg[len(flag) + 1 :]
     return default
 
 
@@ -217,9 +219,7 @@ def cmd_cline(args: list[str]) -> None:
         print(f"Directory not found: {dir_path}", file=sys.stderr)
         return
 
-    md_files = sorted(
-        f for f in os.listdir(dir_path) if f.endswith(".md")
-    )
+    md_files = sorted(f for f in os.listdir(dir_path) if f.endswith(".md"))
     if not md_files:
         print(f"No .md files found in {dir_path}", file=sys.stderr)
         return
@@ -232,7 +232,9 @@ def cmd_cline(args: list[str]) -> None:
         if not content:
             continue
         chunks = filter_and_truncate([content])
-        n = import_chunks(chunks, api_key, user_id, project_id, branch, source, hash_key=f"{project_id}:{source}:{filepath}")
+        n = import_chunks(
+            chunks, api_key, user_id, project_id, branch, source, hash_key=f"{project_id}:{source}:{filepath}"
+        )
         total += n
 
     print(f"Imported {total} memories from {source} ({dir_path})")

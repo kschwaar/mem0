@@ -23,6 +23,7 @@ import urllib.request
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _api import api_url
 from _identity import resolve_api_key, resolve_user_id
 from _project import resolve_branch, resolve_project_id
 
@@ -42,7 +43,6 @@ if os.environ.get("MEM0_DEBUG"):
     except OSError:
         pass
 
-API_URL = "https://api.mem0.ai"
 MAX_TAIL_LINES = 500
 MAX_USER_MESSAGES = 30
 MAX_BASH_COMMANDS = 20
@@ -158,7 +158,9 @@ def build_content(state: dict, source: str) -> str:
     return "\n".join(parts)
 
 
-def store_memory(api_key: str, content: str, user_id: str, source: str, session_id: str = "", project_id: str = "", branch: str = "") -> bool:
+def store_memory(
+    api_key: str, content: str, user_id: str, source: str, session_id: str = "", project_id: str = "", branch: str = ""
+) -> bool:
     """Store session state as a memory via the Mem0 REST API."""
     expires = (date.today() + timedelta(days=SESSION_STATE_EXPIRY_DAYS)).isoformat()
     metadata = {
@@ -169,9 +171,7 @@ def store_memory(api_key: str, content: str, user_id: str, source: str, session_
     if branch:
         metadata["branch"] = branch
     body = {
-        "messages": [
-            {"role": "user", "content": content}
-        ],
+        "messages": [{"role": "user", "content": content}],
         "user_id": user_id,
         "app_id": project_id,
         "metadata": metadata,
@@ -181,7 +181,7 @@ def store_memory(api_key: str, content: str, user_id: str, source: str, session_
 
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
-        f"{API_URL}/v3/memories/add/",
+        api_url("/v3/memories/add/"),
         data=data,
         headers={
             "Content-Type": "application/json",
@@ -281,7 +281,14 @@ def main():
         if stats.get("adds", 0) >= 1:
             log.info("Agent stored %d memories this session — skipping fallback", stats["adds"])
             if show_status:
-                print(format_status(state, source, False, f"agent already stored {stats['adds']} memor{'ies' if stats['adds'] != 1 else 'y'}"))
+                print(
+                    format_status(
+                        state,
+                        source,
+                        False,
+                        f"agent already stored {stats['adds']} memor{'ies' if stats['adds'] != 1 else 'y'}",
+                    )
+                )
             return
     except (OSError, json.JSONDecodeError):
         pass

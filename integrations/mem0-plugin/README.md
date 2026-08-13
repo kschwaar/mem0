@@ -48,6 +48,20 @@ Humans setting up Mem0 by hand should continue with Step 1 below.
    # Should print: m0-your-api-key
    ```
 
+### Self-hosted localhost
+
+The plugin can also target the self-hosted `server/` stack instead of hosted
+Mem0. Start the server, create an API key, then export:
+
+```bash
+export MEM0_API_KEY="m0sk-your-local-key"
+export MEM0_BASE_URL="http://localhost:8888"
+export MEM0_MCP_URL="http://localhost:8888/mcp"
+```
+
+`MEM0_BASE_URL` controls lifecycle hook REST calls. `MEM0_MCP_URL` controls the
+MCP server URL. If either variable is unset, the plugin defaults to hosted Mem0.
+
 ## Step 2: Install the plugin
 
 Choose one of the options below. All require `MEM0_API_KEY` to be set first (see above).
@@ -75,7 +89,7 @@ Codex reads MCP servers from `~/.codex/config.toml` as TOML. Add:
 
 ```toml
 [mcp_servers.mem0]
-url = "https://mcp.mem0.ai/mcp"
+url = "https://mcp.mem0.ai/mcp"  # or: "http://localhost:8888/mcp"
 bearer_token_env_var = "MEM0_API_KEY"
 ```
 
@@ -227,7 +241,7 @@ The plugin includes 17 skills accessible via `/mem0:` commands:
 | Lifecycle Hooks | Yes | No | Opt-in | No | Yes | No | Yes |
 | Mem0 SDK Skill | Yes | No | Yes | No | Yes | No | Yes |
 
-- **MCP Server** — Connects to the Mem0 remote MCP server (`mcp.mem0.ai`), providing tools to add, search, update, and delete memories. No local dependencies required.
+- **MCP Server** — Connects to hosted Mem0 by default, or to a self-hosted server via `MEM0_MCP_URL`, providing tools to add, search, update, and delete memories.
 - **Lifecycle Hooks** — Automatic memory capture at key points. Claude Code, OpenCode, and Antigravity wire hooks natively when the full plugin is installed. Codex hooks are opt-in via a one-time installer (`scripts/install_codex_hooks.py`).
 - **Mem0 SDK Skill** — Guides the AI on how to integrate the Mem0 SDK (Python & TypeScript) into your applications.
 
@@ -242,6 +256,9 @@ When the plugin updates (new version pulled from the marketplace, or a fresh loc
 - **Antigravity:** restart the session.
 
 Your `MEM0_API_KEY` doesn't need to be re-entered — the auth header is re-read from your environment on the new session. The plugin's MCP config uses `${MEM0_API_KEY}` interpolation at session start, not at install time, so as long as the env var is set persistently (in your shell profile or `~/.claude/settings.json` `env` block), reconnection is automatic on restart.
+
+For self-hosted use, `MEM0_BASE_URL` and `MEM0_MCP_URL` are also read from the
+environment at session start.
 
 If reconnection still fails after a restart, check that `MEM0_API_KEY` is reachable in the new shell (`echo $MEM0_API_KEY`) and confirm you're using a key that starts with `m0-` (from https://app.mem0.ai/dashboard/api-keys, not a legacy token).
 
@@ -276,6 +293,8 @@ Once installed, the following tools are available:
 | `delete_all_memories` | Bulk delete all memories in scope |
 | `delete_entities` | Delete a user/agent/app/run entity and its memories |
 | `list_entities` | List users/agents/apps/runs stored in Mem0 |
+| `list_events` | List memory processing events |
+| `get_event_status` | Inspect a memory processing event |
 
 ## License
 

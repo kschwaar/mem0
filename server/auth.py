@@ -151,7 +151,25 @@ async def verify_auth(
     A short-lived session is opened only on the branches that query the DB, so no
     pooled connection is held for the lifetime of the (possibly long-running) request.
     """
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("token "):
+        key = authorization.split(" ", 1)[1].strip()
+        if ADMIN_API_KEY and secrets.compare_digest(key, ADMIN_API_KEY):
+            _mark_auth_type(request, "admin_api_key")
+            return None
+        _mark_auth_type(request, "api_key")
+        with SessionLocal() as db:
+            return _resolve_user_from_api_key(key, db)
     if credentials is not None:
+        scheme = credentials.scheme.lower()
+        if scheme == "token":
+            key = credentials.credentials
+            if ADMIN_API_KEY and secrets.compare_digest(key, ADMIN_API_KEY):
+                _mark_auth_type(request, "admin_api_key")
+                return None
+            _mark_auth_type(request, "api_key")
+            with SessionLocal() as db:
+                return _resolve_user_from_api_key(key, db)
         _mark_auth_type(request, "bearer")
         with SessionLocal() as db:
             return _resolve_user_from_jwt(credentials.credentials, db)
@@ -170,7 +188,7 @@ async def verify_auth(
 
     raise HTTPException(
         status_code=401,
-        detail="Authentication required. Provide a Bearer token or X-API-Key header.",
+        detail="Authentication required. Provide a Bearer token, Token API key, or X-API-Key header.",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -191,7 +209,12 @@ async def require_auth(
 
 
 _BOOTSTRAP_ADMIN = User(
-    id=uuid.UUID(int=0), name="admin_api_key", email="", password_hash="", role="admin", created_at=datetime.min.replace(tzinfo=timezone.utc),
+    id=uuid.UUID(int=0),
+    name="admin_api_key",
+    email="",
+    password_hash="",
+    role="admin",
+    created_at=datetime.min.replace(tzinfo=timezone.utc),
 )
 
 

@@ -10,7 +10,8 @@ import json
 import os
 import urllib.request
 
-SEARCH_URL = "https://api.mem0.ai/v3/memories/search/"
+from _api import api_url
+
 SEARCH_TIMEOUT = 5
 
 
@@ -35,7 +36,7 @@ def should_rerank() -> bool:
 def _do_search(api_key: str, payload: dict) -> list[dict]:
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
-        SEARCH_URL,
+        api_url("/v3/memories/search/"),
         data=body,
         headers={"Authorization": f"Token {api_key}", "Content-Type": "application/json"},
         method="POST",

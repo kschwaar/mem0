@@ -74,8 +74,7 @@ CODING_CATEGORIES = [
     },
     {
         "user_preferences": (
-            "User's stated preferences for tools, libraries, languages, formatting, "
-            "and ways of working."
+            "User's stated preferences for tools, libraries, languages, formatting, and ways of working."
         )
     },
     {
@@ -160,10 +159,7 @@ def _categories_match(current: list | None, proposed: list) -> bool:
         return False
     current_map = {k: v for d in current if isinstance(d, dict) for k, v in d.items()}
     proposed_map = {k: v for d in proposed if isinstance(d, dict) for k, v in d.items()}
-    return all(
-        current_map.get(k, "").strip() == v.strip()
-        for k, v in proposed_map.items()
-    )
+    return all(current_map.get(k, "").strip() == v.strip() for k, v in proposed_map.items())
 
 
 def main() -> int:
@@ -174,6 +170,16 @@ def main() -> int:
         help="Actually call project.update(). Without this flag, runs in dry-run mode.",
     )
     args = ap.parse_args()
+
+    base_url = os.environ.get("MEM0_BASE_URL", "https://api.mem0.ai").rstrip("/")
+    if base_url != "https://api.mem0.ai":
+        print(
+            f"MEM0_BASE_URL is set to {base_url} (a self-hosted server). Custom "
+            "categories (client.project.update) are a Platform-only feature with "
+            "no self-hosted equivalent -- nothing to do here.",
+            file=sys.stderr,
+        )
+        return 0
 
     api_key = resolve_api_key()
     if not api_key:
