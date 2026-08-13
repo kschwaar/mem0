@@ -156,6 +156,13 @@ class TestCLIIntegration:
         result = _run(["import", "--help"])
         assert result.returncode == 0
 
+    def test_graph_backfill_help(self):
+        result = _run(["graph", "backfill", "--help"], env_override={"COLUMNS": "180"})
+        assert result.returncode == 0
+        assert "--memory-config" in result.stdout
+        assert "--neo4j-password" in result.stdout
+        assert "MEM0_GRAPH_NEO4J_PASSWORD" in result.stdout
+
     def test_no_args_shows_help(self):
         """no_args_is_help=True makes Typer print help and exit with code 2."""
         result = _run([])

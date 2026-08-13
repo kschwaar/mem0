@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 from mem0.configs.rerankers.config import RerankerConfig
+from mem0.configs.relationship_graph import RelationshipGraphConfig
 from mem0.embeddings.configs import EmbedderConfig
 from mem0.llms.configs import LlmConfig
 from mem0.vector_stores.configs import VectorStoreConfig
@@ -54,6 +55,10 @@ class MemoryConfig(BaseModel):
     custom_instructions: Optional[str] = Field(
         description="Custom instructions for fact extraction",
         default=None,
+    )
+    relationship_graph: RelationshipGraphConfig = Field(
+        description="Optional OSS relationship graph preview configuration",
+        default_factory=RelationshipGraphConfig,
     )
 
 

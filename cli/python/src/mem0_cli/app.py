@@ -53,7 +53,13 @@ event_app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
-# entity_app and event_app registered after Memory commands to control panel ordering
+graph_app = typer.Typer(
+    name="graph",
+    help="Manage the optional OSS relationship graph.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+# Subgroups are registered after Memory commands to control panel ordering.
 
 
 # ── Validated user identity (set by _get_backend_and_config) ──────────────
@@ -92,6 +98,12 @@ def _entity_callback(ctx: typer.Context) -> None:
 def _event_callback(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand:
         _fire_telemetry(f"event.{ctx.invoked_subcommand}")
+
+
+@graph_app.callback(invoke_without_command=True)
+def _graph_callback(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand:
+        _fire_telemetry(f"graph.{ctx.invoked_subcommand}")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -1120,6 +1132,187 @@ def import_cmd(
     cmd_import(backend, file_path, user_id=ids["user_id"], agent_id=ids["agent_id"], output=output)
 
 
+# ── Graph: explicit OSS backfill ─────────────────────────────────────────
+
+
+@graph_app.command("backfill")
+def graph_backfill(
+    memory_config: Path = typer.Option(
+        ...,
+        "--memory-config",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="OSS Memory configuration JSON file.",
+    ),
+    run_id: str = typer.Option(..., "--run-id", help="Stable checkpoint run identifier."),
+    checkpoint_directory: Path | None = typer.Option(
+        None,
+        "--checkpoint-dir",
+        file_okay=False,
+        resolve_path=True,
+        help="Checkpoint directory (default: $MEM0_DIR/graph-backfill).",
+    ),
+    neo4j_uri: str = typer.Option(
+        ...,
+        "--neo4j-uri",
+        envvar="MEM0_GRAPH_NEO4J_URI",
+        help="Neo4j Bolt URI (env: MEM0_GRAPH_NEO4J_URI).",
+    ),
+    neo4j_username: str = typer.Option(
+        ...,
+        "--neo4j-username",
+        envvar="MEM0_GRAPH_NEO4J_USERNAME",
+        help="Neo4j username (env: MEM0_GRAPH_NEO4J_USERNAME).",
+    ),
+    neo4j_password: str = typer.Option(
+        ...,
+        "--neo4j-password",
+        envvar="MEM0_GRAPH_NEO4J_PASSWORD",
+        help="Neo4j password (prefer MEM0_GRAPH_NEO4J_PASSWORD).",
+        show_default=False,
+    ),
+    neo4j_database: str = typer.Option(
+        "neo4j",
+        "--neo4j-database",
+        envvar="MEM0_GRAPH_NEO4J_DATABASE",
+        help="Neo4j database.",
+    ),
+    user_id: str | None = typer.Option(None, "--user-id", "-u", help="Exact user scope."),
+    agent_id: str | None = typer.Option(None, "--agent-id", help="Exact agent scope."),
+    app_id: str | None = typer.Option(None, "--app-id", help="Exact app scope."),
+    scope_run_id: str | None = typer.Option(None, "--scope-run-id", help="Exact memory run scope."),
+    page_size: int = typer.Option(50, "--page-size", min=1, max=1000, help="Memories per page."),
+    max_memories: int | None = typer.Option(
+        None, "--max-memories", min=1, help="Bound memories handled in this invocation."
+    ),
+    max_records: int = typer.Option(
+        10_000, "--max-records", min=1, help="Maximum scoped vector-store snapshot size."
+    ),
+    max_relationships: int = typer.Option(
+        50, "--max-relationships", min=1, help="Maximum relationships extracted per memory."
+    ),
+    bootstrap_schema: bool = typer.Option(
+        True,
+        "--bootstrap-schema/--no-bootstrap-schema",
+        help="Apply idempotent Neo4j schema before backfill.",
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Backfill the optional Neo4j relationship graph from OSS memories."""
+    from mem0_cli.commands.graph import cmd_graph_backfill, default_checkpoint_directory
+
+    cmd_graph_backfill(
+        memory_config=memory_config,
+        checkpoint_directory=checkpoint_directory or default_checkpoint_directory(),
+        run_id=run_id,
+        neo4j_uri=neo4j_uri,
+        neo4j_username=neo4j_username,
+        neo4j_password=neo4j_password,
+        neo4j_database=neo4j_database,
+        user_id=user_id,
+        agent_id=agent_id,
+        app_id=app_id,
+        scope_run_id=scope_run_id,
+        page_size=page_size,
+        max_memories=max_memories,
+        max_records=max_records,
+        max_relationships=max_relationships,
+        bootstrap_schema=bootstrap_schema,
+        output=output,
+    )
+
+
+def _run_graph_admin(
+    *,
+    memory_config: Path,
+    action: str,
+    output: str,
+    event_id: str | None = None,
+    limit: int = 100,
+    confirmed: bool = False,
+) -> None:
+    from mem0_cli.commands.graph import cmd_graph_admin
+
+    cmd_graph_admin(
+        memory_config=memory_config,
+        action=action,
+        output=output,
+        event_id=event_id,
+        limit=limit,
+        confirmed=confirmed,
+    )
+
+
+@graph_app.command("status")
+def graph_status(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Show projection queue health and lag without starting a worker."""
+    _run_graph_admin(memory_config=memory_config, action="status", output=output)
+
+
+@graph_app.command("drain")
+def graph_drain(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    limit: int = typer.Option(
+        100, "--limit", min=1, max=100_000, help="Maximum events to process."
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Process a bounded number of ready or retryable projection events."""
+    _run_graph_admin(memory_config=memory_config, action="drain", output=output, limit=limit)
+
+
+@graph_app.command("reconcile")
+def graph_reconcile(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    limit: int = typer.Option(
+        100, "--limit", min=1, max=100_000, help="Maximum pending intents to inspect."
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Republish stranded pending intents only when canonical content still matches."""
+    _run_graph_admin(memory_config=memory_config, action="reconcile", output=output, limit=limit)
+
+
+@graph_app.command("replay")
+def graph_replay(
+    event_id: str = typer.Argument(..., help="Applied or dead-letter event ID."),
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Move one applied or dead-letter event back to the ready queue."""
+    _run_graph_admin(memory_config=memory_config, action="replay", output=output, event_id=event_id)
+
+
+@graph_app.command("reset")
+def graph_reset(
+    memory_config: Path = typer.Option(
+        ..., "--memory-config", exists=True, dir_okay=False, readable=True
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="Confirm deletion of the configured collection namespace."
+    ),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text or json."),
+) -> None:
+    """Delete only graph data in the configured Mem0 collection namespace."""
+    _run_graph_admin(memory_config=memory_config, action="reset", output=output, confirmed=yes)
+
+
+app.add_typer(graph_app, name="graph", rich_help_panel="Management")
+
+
 # ── Help (machine-readable) ──────────────────────────────────────────────
 
 
@@ -1285,6 +1478,27 @@ def _build_help_json() -> dict:
                 },
             },
         },
+        "graph": {
+            "description": "Manage the optional OSS relationship graph.",
+            "subcommands": {
+                "backfill": {
+                    "description": "Backfill Neo4j relationships from canonical OSS memories.",
+                    "usage": "mem0 graph backfill --memory-config FILE --run-id ID [OPTIONS]",
+                    "options": {
+                        "--memory-config": "OSS Memory configuration JSON file.",
+                        "--run-id": "Stable checkpoint run identifier.",
+                        "--checkpoint-dir": "Privacy-safe checkpoint directory.",
+                        "--neo4j-uri": "Neo4j Bolt URI.",
+                        "--neo4j-username": "Neo4j username.",
+                        "--neo4j-password": "Neo4j password; prefer the environment variable.",
+                        "--user-id, -u": "Exact user scope.",
+                        "--agent-id": "Exact agent scope.",
+                        "--app-id": "Exact app scope.",
+                        "--scope-run-id": "Exact memory run scope.",
+                    },
+                }
+            },
+        },
         "entity": {
             "description": "Manage entities.",
             "subcommands": {
@@ -1377,6 +1591,7 @@ def help(
         console.print("  config           Manage configuration (show, get, set)")
         console.print("  entity           Manage entities (list, delete)")
         console.print("  event            Inspect background events (list, status)")
+        console.print("  graph            Manage the optional OSS relationship graph")
         console.print("  init             Interactive setup wizard")
         console.print("  status           Check connectivity and authentication")
         console.print()

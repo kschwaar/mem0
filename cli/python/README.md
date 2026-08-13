@@ -16,6 +16,12 @@ The official command-line interface for [mem0](https://mem0.ai) — the memory l
 pipx install mem0-cli
 ```
 
+Install the optional graph dependencies to use the OSS Neo4j backfill command:
+
+```bash
+pipx install 'mem0-cli[graphs]'
+```
+
 ### Using pip
 
 ```bash
@@ -206,6 +212,46 @@ mem0 config show              # Display current config (secrets redacted)
 mem0 config get api_key       # Get a specific value
 mem0 config set user_id bob   # Set a value
 ```
+
+### `mem0 graph backfill`
+
+Explicitly project existing OSS memories into the optional Neo4j relationship
+graph. The Memory configuration file selects the canonical vector store and LLM;
+the command never changes canonical memories.
+
+### Graph preview operations
+
+Use the first-class `relationship_graph` section in the Memory JSON config for
+bounded projection administration:
+
+```bash
+mem0 graph status --memory-config memory.json --output json
+mem0 graph drain --memory-config memory.json --limit 100
+mem0 graph reconcile --memory-config memory.json --limit 100
+mem0 graph replay <event-id> --memory-config memory.json
+mem0 graph reset --memory-config memory.json --yes
+```
+
+Reset is collection-scoped and requires explicit confirmation. Status output
+contains queue counts and lag, not memory content.
+
+```bash
+export MEM0_GRAPH_NEO4J_URI=neo4j://localhost:7687
+export MEM0_GRAPH_NEO4J_USERNAME=neo4j
+export MEM0_GRAPH_NEO4J_PASSWORD='replace-me'
+
+mem0 graph backfill \
+  --memory-config ./memory-config.json \
+  --run-id initial-user-graph \
+  --user-id alice
+```
+
+The run writes a resumable, privacy-safe checkpoint under
+`$MEM0_DIR/graph-backfill` by default. Use the same `--run-id` to resume and
+`--max-memories` for a bounded trial. Schema bootstrap is idempotent and enabled
+by default; pass `--no-bootstrap-schema` only when the schema is managed
+separately. Prefer environment variables over the Neo4j credential flags so
+secrets do not appear in process arguments.
 
 ### `mem0 entity`
 

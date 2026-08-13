@@ -10,7 +10,7 @@ import uuid
 import warnings
 from copy import deepcopy
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import ValidationError
 
@@ -73,6 +73,11 @@ from mem0.utils.scoring import (
     score_and_rank,
 )
 from mem0.vector_stores.base import VectorStoreBase
+
+if TYPE_CHECKING:
+    from mem0.graphs.hooks import RelationshipGraphWriteHook
+    from mem0.graphs.retrieval import RelationshipGraphSearch
+    from mem0.graphs.runtime import RelationshipGraphRuntime
 
 # Suppress SWIG deprecation warnings globally
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*SwigPy.*")
@@ -480,9 +485,99 @@ class _AsyncOSSProject:
         raise ValueError(_PROJECT_UPDATE_UNSUPPORTED_ERROR)
 
 
-class Memory(MemoryBase):
-    def __init__(self, config: MemoryConfig = MemoryConfig()):
+class _RelationshipGraphWriteMixin:
+    _graph_write_hook: Optional["RelationshipGraphWriteHook"]
+    collection_name: str
+
+    def _prepare_graph_add(self, memory_id, memory_hash, metadata):
+        if self._graph_write_hook is None:
+            return None
+        try:
+            return self._graph_write_hook.prepare_add(
+                collection_name=self.collection_name,
+                memory_id=memory_id,
+                memory_hash=memory_hash,
+                metadata=metadata,
+            )
+        except Exception as error:
+            logger.warning("Graph projection ADD intent could not be prepared (%s)", type(error).__name__)
+            return None
+
+    def _prepare_graph_update(self, memory_id, previous_hash, memory_hash, metadata):
+        if self._graph_write_hook is None:
+            return None
+        try:
+            return self._graph_write_hook.prepare_update(
+                collection_name=self.collection_name,
+                memory_id=memory_id,
+                previous_hash=previous_hash,
+                memory_hash=memory_hash,
+                metadata=metadata,
+            )
+        except Exception as error:
+            logger.warning("Graph projection UPDATE intent could not be prepared (%s)", type(error).__name__)
+            return None
+
+    def _prepare_graph_delete(self, memory_id, memory_hash, metadata):
+        if self._graph_write_hook is None:
+            return None
+        try:
+            return self._graph_write_hook.prepare_delete(
+                collection_name=self.collection_name,
+                memory_id=memory_id,
+                memory_hash=memory_hash,
+                metadata=metadata,
+            )
+        except Exception as error:
+            logger.warning("Graph projection DELETE intent could not be prepared (%s)", type(error).__name__)
+            return None
+
+    def _publish_graph_event(self, event_id, memory_text=None):
+        if self._graph_write_hook is None or event_id is None:
+            return
+        try:
+            self._graph_write_hook.publish(event_id, memory_text=memory_text)
+        except Exception as error:
+            logger.warning("Graph projection event remains pending after publish failure (%s)", type(error).__name__)
+
+
+class _RelationshipGraphSearchMixin:
+    _relationship_graph_search: Optional["RelationshipGraphSearch"]
+    collection_name: str
+
+    def _relationship_graph_inputs(self, query_entities, filters, candidate_memory_ids):
+        if self._relationship_graph_search is None or not query_entities or not candidate_memory_ids:
+            return {}, {}, 0.0
+        try:
+            signals = self._relationship_graph_search.signals(
+                collection_name=self.collection_name,
+                filters=filters,
+                query_entities=query_entities,
+                candidate_memory_ids=candidate_memory_ids,
+            )
+        except Exception as error:
+            logger.warning("Relationship graph search unavailable (%s)", type(error).__name__)
+            return {}, {}, 0.0
+        scores = {memory_id: signal.graph_score for memory_id, signal in signals.items()}
+        explanations = {
+            memory_id: [explanation.model_dump(mode="json") for explanation in signal.explanations]
+            for memory_id, signal in signals.items()
+        }
+        return scores, explanations, self._relationship_graph_search.graph_weight
+
+
+class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, MemoryBase):
+    def __init__(
+        self,
+        config: MemoryConfig = MemoryConfig(),
+        *,
+        graph_write_hook: Optional["RelationshipGraphWriteHook"] = None,
+        relationship_graph_search: Optional["RelationshipGraphSearch"] = None,
+    ):
         self.config = config
+        self.relationship_graph: Optional["RelationshipGraphRuntime"] = None
+        self._graph_write_hook = graph_write_hook
+        self._relationship_graph_search = relationship_graph_search
 
         self.embedding_model = EmbedderFactory.create(
             self.config.embedder.provider,
@@ -497,6 +592,7 @@ class Memory(MemoryBase):
         self.collection_name = self.config.vector_store.config.collection_name
         self.api_version = self.config.version
         self.custom_instructions = self.config.custom_instructions
+        self._configure_relationship_graph(graph_write_hook, relationship_graph_search)
 
         # Initialize reranker if configured
         self.reranker = None
@@ -543,6 +639,18 @@ class Memory(MemoryBase):
             )
 
         capture_event("mem0.init", self, {"sync_type": "sync"})
+
+    def _configure_relationship_graph(self, graph_write_hook, relationship_graph_search):
+        graph_config = self.config.relationship_graph
+        if not graph_config.enabled:
+            return
+        if graph_write_hook is not None or relationship_graph_search is not None:
+            raise ValueError("relationship_graph configuration cannot be combined with injected graph components")
+        from mem0.graphs.runtime import RelationshipGraphRuntime
+
+        self.relationship_graph = RelationshipGraphRuntime.compose(self, graph_config)
+        self._graph_write_hook = self.relationship_graph.write_hook
+        self._relationship_graph_search = self.relationship_graph.search
 
     @property
     def project(self):
@@ -1038,6 +1146,11 @@ class Memory(MemoryBase):
             self.db.save_messages(messages, session_scope)
             return []
 
+        graph_events = {
+            memory_id: self._prepare_graph_add(memory_id, payload["hash"], payload)
+            for memory_id, _, _, payload in records
+        }
+
         # Phase 6: Batch persist
         all_vectors = [r[2] for r in records]
         all_ids = [r[0] for r in records]
@@ -1185,6 +1298,9 @@ class Memory(MemoryBase):
                             logger.warning(f"Batch entity insert failed: {e}")
         except Exception as e:
             logger.warning(f"Batch entity linking failed: {e}")
+
+        for memory_id, text, _, _ in records:
+            self._publish_graph_event(graph_events[memory_id], memory_text=text)
 
         # Phase 8: Save messages + return
         self.db.save_messages(messages, session_scope)
@@ -1685,6 +1801,12 @@ class Memory(MemoryBase):
                 }
             )
 
+        graph_scores, graph_explanations, graph_weight = self._relationship_graph_inputs(
+            query_entities,
+            filters,
+            [candidate["id"] for candidate in candidates],
+        )
+
         # Step 8: Score and rank
         scored_results = score_and_rank(
             semantic_results=candidates,
@@ -1693,6 +1815,9 @@ class Memory(MemoryBase):
             threshold=threshold,
             top_k=limit,
             explain=explain,
+            graph_scores=graph_scores,
+            graph_weight=graph_weight,
+            graph_explanations=graph_explanations if explain else None,
         )
 
         # Step 9: Format results
@@ -1743,6 +1868,8 @@ class Memory(MemoryBase):
                 memory_item_dict["metadata"].update(additional_metadata)
             if explain and "score_details" in scored:
                 memory_item_dict["score_details"] = scored["score_details"]
+            if explain and "graph_explanations" in scored:
+                memory_item_dict["graph_explanations"] = scored["graph_explanations"]
 
             original_memories.append(memory_item_dict)
 
@@ -1985,6 +2112,7 @@ class Memory(MemoryBase):
             new_metadata["created_at"] = datetime.now(timezone.utc).isoformat()
         new_metadata["updated_at"] = new_metadata["created_at"]
         new_metadata["text_lemmatized"] = lemmatize_for_bm25(data)
+        graph_event = self._prepare_graph_add(memory_id, new_metadata["hash"], new_metadata)
 
         self.vector_store.insert(
             vectors=[embeddings],
@@ -2001,6 +2129,7 @@ class Memory(MemoryBase):
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
         )
+        self._publish_graph_event(graph_event, memory_text=data)
         return memory_id
 
     def _create_procedural_memory(self, messages, metadata=None, prompt=None):
@@ -2077,6 +2206,16 @@ class Memory(MemoryBase):
         else:
             embeddings = self.embedding_model.embed(data, "update")
 
+        graph_event = None
+        if text_changed:
+            previous_hash = existing_memory.payload.get("hash") or hashlib.md5(prev_value.encode()).hexdigest()
+            graph_event = self._prepare_graph_update(
+                memory_id,
+                previous_hash,
+                new_metadata["hash"],
+                new_metadata,
+            )
+
         self.vector_store.update(
             vector_id=memory_id,
             vector=embeddings,
@@ -2101,6 +2240,7 @@ class Memory(MemoryBase):
         if text_changed:
             self._remove_memory_from_entity_store(memory_id, session_filters)
             self._link_entities_for_memory(memory_id, data, session_filters)
+            self._publish_graph_event(graph_event, memory_text=data)
 
         return memory_id
 
@@ -2115,6 +2255,8 @@ class Memory(MemoryBase):
         updated_at = datetime.now(timezone.utc).isoformat()
         payload = existing_memory.payload or {}
         session_filters = {k: payload[k] for k in ("user_id", "agent_id", "run_id") if payload.get(k)}
+        memory_hash = payload.get("hash") or hashlib.md5(prev_value.encode()).hexdigest()
+        graph_event = self._prepare_graph_delete(memory_id, memory_hash, payload)
         self.vector_store.delete(vector_id=memory_id)
         self.db.add_history(
             memory_id,
@@ -2131,6 +2273,7 @@ class Memory(MemoryBase):
         # Entity-store cleanup: strip this memory's id from any entity records
         # that linked to it. Non-fatal — the helper swallows errors.
         self._remove_memory_from_entity_store(memory_id, session_filters)
+        self._publish_graph_event(graph_event)
 
         return memory_id
 
@@ -2142,6 +2285,9 @@ class Memory(MemoryBase):
             Recreates the vector store with a new client
         """
         logger.warning("Resetting all memories")
+
+        if self.relationship_graph is not None and self.relationship_graph.reset_on_memory_reset:
+            self.relationship_graph.reset()
 
         self.db.reset()
         self.db.close()
@@ -2171,14 +2317,25 @@ class Memory(MemoryBase):
         if hasattr(self, "db") and self.db is not None:
             self.db.close()
             self.db = None
+        if self.relationship_graph is not None:
+            self.relationship_graph.close()
 
     def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")
 
 
-class AsyncMemory(MemoryBase):
-    def __init__(self, config: MemoryConfig = MemoryConfig()):
+class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, MemoryBase):
+    def __init__(
+        self,
+        config: MemoryConfig = MemoryConfig(),
+        *,
+        graph_write_hook: Optional["RelationshipGraphWriteHook"] = None,
+        relationship_graph_search: Optional["RelationshipGraphSearch"] = None,
+    ):
         self.config = config
+        self.relationship_graph: Optional["RelationshipGraphRuntime"] = None
+        self._graph_write_hook = graph_write_hook
+        self._relationship_graph_search = relationship_graph_search
 
         self.embedding_model = EmbedderFactory.create(
             self.config.embedder.provider,
@@ -2193,6 +2350,7 @@ class AsyncMemory(MemoryBase):
         self.collection_name = self.config.vector_store.config.collection_name
         self.api_version = self.config.version
         self.custom_instructions = self.config.custom_instructions
+        self._configure_relationship_graph(graph_write_hook, relationship_graph_search)
         self._entity_store = None
 
         # Initialize reranker if configured
@@ -2221,6 +2379,18 @@ class AsyncMemory(MemoryBase):
             )
 
         capture_event("mem0.init", self, {"sync_type": "async"})
+
+    def _configure_relationship_graph(self, graph_write_hook, relationship_graph_search):
+        graph_config = self.config.relationship_graph
+        if not graph_config.enabled:
+            return
+        if graph_write_hook is not None or relationship_graph_search is not None:
+            raise ValueError("relationship_graph configuration cannot be combined with injected graph components")
+        from mem0.graphs.runtime import RelationshipGraphRuntime
+
+        self.relationship_graph = RelationshipGraphRuntime.compose(self, graph_config)
+        self._graph_write_hook = self.relationship_graph.write_hook
+        self._relationship_graph_search = self.relationship_graph.search
 
     @property
     def project(self):
@@ -2711,6 +2881,15 @@ class AsyncMemory(MemoryBase):
             await asyncio.to_thread(self.db.save_messages, messages, session_scope)
             return []
 
+        graph_events = {}
+        for memory_id, _, _, payload in records:
+            graph_events[memory_id] = await asyncio.to_thread(
+                self._prepare_graph_add,
+                memory_id,
+                payload["hash"],
+                payload,
+            )
+
         # Phase 6: Batch persist
         all_vectors = [r[2] for r in records]
         all_ids = [r[0] for r in records]
@@ -2863,6 +3042,13 @@ class AsyncMemory(MemoryBase):
                             logger.warning(f"Batch entity insert failed (async): {e}")
         except Exception as e:
             logger.warning(f"Batch entity linking failed (async): {e}")
+
+        for memory_id, text, _, _ in records:
+            await asyncio.to_thread(
+                self._publish_graph_event,
+                graph_events[memory_id],
+                text,
+            )
 
         # Phase 8: Save messages + return
         await asyncio.to_thread(self.db.save_messages, messages, session_scope)
@@ -3365,6 +3551,13 @@ class AsyncMemory(MemoryBase):
                 }
             )
 
+        graph_scores, graph_explanations, graph_weight = await asyncio.to_thread(
+            self._relationship_graph_inputs,
+            query_entities,
+            filters,
+            [candidate["id"] for candidate in candidates],
+        )
+
         # Step 8: Score and rank
         scored_results = score_and_rank(
             semantic_results=candidates,
@@ -3373,6 +3566,9 @@ class AsyncMemory(MemoryBase):
             threshold=threshold,
             top_k=limit,
             explain=explain,
+            graph_scores=graph_scores,
+            graph_weight=graph_weight,
+            graph_explanations=graph_explanations if explain else None,
         )
 
         # Step 9: Format results
@@ -3422,6 +3618,8 @@ class AsyncMemory(MemoryBase):
                 memory_item_dict["metadata"].update(additional_metadata)
             if explain and "score_details" in scored:
                 memory_item_dict["score_details"] = scored["score_details"]
+            if explain and "graph_explanations" in scored:
+                memory_item_dict["graph_explanations"] = scored["graph_explanations"]
 
             original_memories.append(memory_item_dict)
 
@@ -3680,6 +3878,12 @@ class AsyncMemory(MemoryBase):
             new_metadata["created_at"] = datetime.now(timezone.utc).isoformat()
         new_metadata["updated_at"] = new_metadata["created_at"]
         new_metadata["text_lemmatized"] = lemmatize_for_bm25(data)
+        graph_event = await asyncio.to_thread(
+            self._prepare_graph_add,
+            memory_id,
+            new_metadata["hash"],
+            new_metadata,
+        )
 
         await asyncio.to_thread(
             self.vector_store.insert,
@@ -3699,6 +3903,8 @@ class AsyncMemory(MemoryBase):
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
         )
+
+        await asyncio.to_thread(self._publish_graph_event, graph_event, data)
 
         return memory_id
 
@@ -3793,6 +3999,17 @@ class AsyncMemory(MemoryBase):
         else:
             embeddings = await asyncio.to_thread(self.embedding_model.embed, data, "update")
 
+        graph_event = None
+        if text_changed:
+            previous_hash = existing_memory.payload.get("hash") or hashlib.md5(prev_value.encode()).hexdigest()
+            graph_event = await asyncio.to_thread(
+                self._prepare_graph_update,
+                memory_id,
+                previous_hash,
+                new_metadata["hash"],
+                new_metadata,
+            )
+
         await asyncio.to_thread(
             self.vector_store.update,
             vector_id=memory_id,
@@ -3819,6 +4036,7 @@ class AsyncMemory(MemoryBase):
         if text_changed:
             await self._remove_memory_from_entity_store(memory_id, session_filters)
             await self._link_entities_for_memory(memory_id, data, session_filters)
+            await asyncio.to_thread(self._publish_graph_event, graph_event, data)
 
         return memory_id
 
@@ -3833,6 +4051,13 @@ class AsyncMemory(MemoryBase):
         updated_at = datetime.now(timezone.utc).isoformat()
         payload = existing_memory.payload or {}
         session_filters = {k: payload[k] for k in ("user_id", "agent_id", "run_id") if payload.get(k)}
+        memory_hash = payload.get("hash") or hashlib.md5(prev_value.encode()).hexdigest()
+        graph_event = await asyncio.to_thread(
+            self._prepare_graph_delete,
+            memory_id,
+            memory_hash,
+            payload,
+        )
 
         await asyncio.to_thread(self.vector_store.delete, vector_id=memory_id)
         await asyncio.to_thread(
@@ -3851,6 +4076,8 @@ class AsyncMemory(MemoryBase):
         if not skip_entity_cleanup:
             await self._remove_memory_from_entity_store(memory_id, session_filters)
 
+        await asyncio.to_thread(self._publish_graph_event, graph_event)
+
         return memory_id
 
     async def reset(self):
@@ -3861,6 +4088,8 @@ class AsyncMemory(MemoryBase):
             Recreates the vector store with a new client
         """
         logger.warning("Resetting all memories")
+        if self.relationship_graph is not None and self.relationship_graph.reset_on_memory_reset:
+            await asyncio.to_thread(self.relationship_graph.reset)
         await asyncio.to_thread(self.vector_store.delete_col)
 
         gc.collect()
@@ -3891,6 +4120,8 @@ class AsyncMemory(MemoryBase):
         if hasattr(self, "db") and self.db is not None:
             self.db.close()
             self.db = None
+        if self.relationship_graph is not None:
+            self.relationship_graph.close()
 
     async def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")

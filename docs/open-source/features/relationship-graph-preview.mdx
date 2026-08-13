@@ -1,0 +1,117 @@
+---
+title: "Relationship Graph Preview"
+description: "Opt in to Neo4j-backed relationship projection and bounded graph reranking in Mem0 OSS for Python."
+icon: "diagram-project"
+---
+
+The relationship graph preview adds a derived Neo4j projection beside canonical vector memory. It extracts explicit entity relationships after successful memory writes, processes them through a durable SQLite outbox, and uses active graph evidence to rerank only the memories already returned by semantic search.
+
+<Warning>
+  This feature is an opt-in OSS preview for Python. Keep the vector store as the source of truth, monitor projection lag, and test retrieval quality on your own corpus before production use.
+</Warning>
+
+## Install and configure
+
+Install the optional Neo4j dependency and start Neo4j 5.x:
+
+```bash
+pip install "mem0ai[graphs]"
+```
+
+Set credentials outside your configuration file:
+
+```bash
+export MEM0_GRAPH_NEO4J_URI="neo4j://localhost:7687"
+export MEM0_GRAPH_NEO4J_USERNAME="neo4j"
+export MEM0_GRAPH_NEO4J_PASSWORD="..."
+```
+
+Enable the graph explicitly. It is disabled by default and performs no graph I/O until enabled.
+
+```python
+from mem0 import Memory
+
+memory = Memory.from_config(
+    {
+        "relationship_graph": {
+            "enabled": True,
+            "auto_start_worker": True,
+            "reset_on_memory_reset": False,
+            "graph_weight": 0.15,
+            "query_timeout_seconds": 0.25,
+            "circuit_breaker_failures": 3,
+            "circuit_breaker_cooldown_seconds": 30,
+            "max_projection_lag_seconds": 60,
+            "max_dead_letter_events": 0,
+        }
+    }
+)
+```
+
+`Memory` now owns the graph connection, schema bootstrap, durable outbox, projection worker, and search reranker. Call `memory.close()` when the application stops.
+
+## Consistency and failure behavior
+
+Canonical writes complete independently of graph projection. Mem0 records graph intent before changing canonical memory and publishes a validated payload afterward. A worker retries projection with expiring leases and moves repeatedly failing events to a dead-letter state.
+
+Graph reads have a Neo4j transaction timeout and circuit breaker. When the graph is slow or unavailable, search logs only the exception type and returns the vector-search baseline. Raw memory text is not stored in the outbox.
+
+Graph retrieval is deliberately bounded:
+
+- It can rerank only existing semantic candidates.
+- It never returns graph-only memories.
+- It uses exact collection and user, agent, app, and run scope.
+- Explanations include bounded active assertions and confidence, not raw evidence text.
+
+## Operate the projection
+
+Put the same configuration in a JSON file for administrative commands. Commands construct the graph runtime without starting its background worker.
+
+```bash
+mem0 graph status --memory-config memory.json --output json
+mem0 graph drain --memory-config memory.json --limit 100
+mem0 graph reconcile --memory-config memory.json --limit 100
+mem0 graph replay <event-id> --memory-config memory.json
+```
+
+`status` reports privacy-safe counts, oldest-unapplied lag, worker state, and machine-readable `projection_lag`, `dead_letter`, or `worker_error` alerts. `reconcile` republishes a stranded `PENDING` intent only if the current canonical memory still exists and its content hash matches the intent. `replay` accepts only applied or dead-letter events.
+
+Alert on growing lag, any dead-letter count, or repeated circuit-open warnings. Use a process supervisor if the worker runs in a long-lived service.
+
+## Reset behavior
+
+`Memory.reset()` does not erase graph data unless `reset_on_memory_reset` is explicitly set to `True`. The safer operational path is a confirmed, namespaced reset:
+
+```bash
+mem0 graph reset --memory-config memory.json --yes
+```
+
+This deletes only Mem0 graph nodes and evidence connected to the configured vector-store collection. It does not issue a database-wide delete.
+
+## Backfill existing memories
+
+Use the resumable backfill before enabling graph-assisted reads for an existing collection:
+
+```bash
+mem0 graph backfill \
+  --memory-config memory.json \
+  --run-id initial-preview \
+  --user-id alice
+```
+
+Backfill checkpoints exclude completed memory IDs from command output and never store raw memory text.
+
+## Run the retrieval gate
+
+The repository includes an executable offline harness that compares vector-only ranking with graph reranking over identical semantic candidates:
+
+```bash
+python scripts/benchmark_relationship_graph_retrieval.py \
+  tests/fixtures/relationship_graph_retrieval.json \
+  --k 2 \
+  --min-recall-delta 0 \
+  --min-mrr-delta 0 \
+  --max-p95-latency-overhead-ms 5
+```
+
+Replace the fixture with representative, human-labeled queries before changing `graph_weight`. The bundled smoke corpus preserves recall and improves reciprocal rank, but it is not evidence for graph-only expansion; that mode remains disabled.
