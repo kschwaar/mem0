@@ -355,20 +355,20 @@ yields no graph assertions, while canonical memory remains unchanged.
 V3 updates are explicit `Memory.update()` calls. When text changes:
 
 1. Write the canonical vector update and normal history event.
-2. Emit a `RETRACT_EVIDENCE(memory_id, previous_hash)` intent followed by an
+2. Emit a `REMOVE_EVIDENCE(memory_id, previous_hash)` intent followed by an
    `UPSERT_ASSERTIONS(memory_id, new_hash)` intent.
-3. Projector retracts evidence attached to the old hash; an assertion becomes
-   `RETRACTED` only if it has no active evidence.
+3. Projector hard-deletes evidence attached to the old hash; an assertion
+   becomes `RETRACTED` only if it has no remaining evidence.
 4. Extract and project assertions for the new text.
 
-No relationship is deleted merely because the same words can no longer be
-re-extracted. This is the key provenance guarantee missing from the prior
-design.
+The assertion node is retained as retracted when it loses all evidence. An
+assertion independently supported by another memory remains active. This is the
+key provenance guarantee missing from the prior design.
 
 ### 5.3 Delete, delete-all, and reset
 
 - `delete(memory_id)`: append a graph tombstone before deleting the canonical
-  record; projector retracts that memory's evidence and marks its
+  record; projector hard-deletes that memory's evidence and marks its
   `Mem0Memory.deleted_at`. It never deletes another memory's supporting edge.
 - `delete_all(scope)`: emits a scope tombstone with a bounded, paginated list
   of memory IDs. It must use the same filter semantics as vector deletion.
@@ -570,7 +570,7 @@ begins; it is not necessary to settle later behavior while proving the schema.
 | D2 | Accepted for slice 1 | Where does relationship extraction run? | Use an explicitly invoked, separate extractor in the first slice. Consider merging it into the v3 extraction request only after the schema is proven. | First slice |
 | D3 | Accepted for slice 1 | How are entities resolved? | Exact normalized name + semantic type + scope + collection only. No aliases or embedding merge. | First slice |
 | D4 | Provisional | Can graph results expand search candidates? | Initially rerank semantic candidates only. Graph-only candidate expansion requires separate retrieval evaluation. | Retrieval slice |
-| D5 | Provisional | What happens on deletion? | The initial lifecycle slice hard-deletes evidence for deleted memories and retracts unsupported assertions. Historical retention can be added only with an explicit privacy policy. | Lifecycle slice |
+| D5 | Accepted for slice 3 | What happens on deletion? | The initial lifecycle slice hard-deletes evidence for deleted memories and retracts unsupported assertions. Historical retention can be added only with an explicit privacy policy. | Lifecycle slice |
 | D6 | Accepted for slice 1 | What Neo4j deployment is supported? | Neo4j Community 5.x in Docker is the development and integration-test baseline. Enterprise-only constraints are not required. | First slice |
 | D7 | Provisional | How are projection events processed? | No outbox in the first slice. Projection is an explicit operation. Before live write hooks are added, choose and test a durable SQLite outbox with a `ProjectionEvent` ledger. | Live-write slice |
 
@@ -633,5 +633,19 @@ an explicit Memory JSON configuration, exact scope and Neo4j connection
 settings, uses the configured Memory LLM through the validated extractor, and
 returns privacy-safe progress. Neo4j credentials can be supplied through
 environment variables and are never included in command results or checkpoint
-data. Update/delete lifecycle behavior and normal memory hooks remain out of
-scope pending review of this completed manual boundary.
+data. At that stopping point, update/delete lifecycle behavior and normal
+memory hooks remained out of scope.
+
+### 12.3 Third-slice implementation record
+
+Explicit, hash-guarded update and delete lifecycle operations are implemented
+without normal `Memory` hooks. Update validates the complete new extraction,
+then replaces the memory hash, projects new evidence, hard-deletes evidence for
+the prior hash, and retracts newly unsupported assertions in one managed Neo4j
+transaction. Delete hard-deletes only the exact memory version's evidence,
+retains a graph tombstone, and likewise retracts only unsupported assertions.
+Assertions with independent evidence remain active. Raw canonical memory text
+is used only by the extractor and is never sent to Neo4j. Stale hashes, wrong
+scopes, and missing targets fail before mutation. Durable ordering relative to
+canonical update/delete operations remains the responsibility of the next
+SQLite outbox slice.

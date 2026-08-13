@@ -10,7 +10,9 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from mem0.graphs.models import (
+    GraphLifecycleMutation,
     GraphMemoryState,
+    GraphUpdateMutation,
     ProjectionResult,
     ProjectionSource,
     GraphScope,
@@ -119,6 +121,16 @@ ON CREATE SET
     assertion.valid_from = $valid_from,
     assertion.valid_to = $valid_to,
     assertion.created_at = $recorded_at,
+    assertion.updated_at = $recorded_at
+ON MATCH SET
+    assertion.invalidated_at = CASE
+        WHEN assertion.state = 'RETRACTED' THEN null
+        ELSE assertion.invalidated_at
+    END,
+    assertion.state = CASE
+        WHEN assertion.state = 'RETRACTED' THEN 'ACTIVE'
+        ELSE assertion.state
+    END,
     assertion.updated_at = $recorded_at
 MERGE (evidence:Evidence {evidence_id: $evidence_id})
 ON CREATE SET
@@ -242,6 +254,78 @@ RETURN
     size(complete_assertions) AS complete_assertion_count
 """
 
+LIFECYCLE_TARGET_QUERY = """
+MATCH (memory:Mem0Memory {
+    collection_name: $collection_name,
+    scope_key: $scope_key,
+    memory_id: $memory_id
+})
+WHERE memory.memory_hash = $memory_hash
+  AND memory.deleted_at IS NULL
+OPTIONAL MATCH (assertion:RelationshipAssertion)-[:SUPPORTED_BY]->(evidence:Evidence)-[:FROM_MEMORY]->(memory)
+WHERE evidence.memory_hash = $memory_hash
+RETURN
+    memory.memory_id AS memory_id,
+    collect(DISTINCT elementId(evidence)) AS evidence_element_ids,
+    collect(DISTINCT elementId(assertion)) AS assertion_element_ids
+"""
+
+UPDATE_MEMORY_VERSION_QUERY = """
+MATCH (memory:Mem0Memory {
+    collection_name: $collection_name,
+    scope_key: $scope_key,
+    memory_id: $memory_id
+})
+WHERE memory.memory_hash = $previous_hash
+  AND memory.deleted_at IS NULL
+SET
+    memory.memory_hash = $memory_hash,
+    memory.updated_at = $recorded_at,
+    memory.deleted_at = null
+RETURN memory.memory_id AS memory_id
+"""
+
+MARK_MEMORY_DELETED_QUERY = """
+MATCH (memory:Mem0Memory {
+    collection_name: $collection_name,
+    scope_key: $scope_key,
+    memory_id: $memory_id
+})
+WHERE memory.memory_hash = $memory_hash
+  AND memory.deleted_at IS NULL
+SET
+    memory.deleted_at = $deleted_at,
+    memory.updated_at = $deleted_at
+RETURN memory.memory_id AS memory_id
+"""
+
+DELETE_MEMORY_EVIDENCE_QUERY = """
+UNWIND $evidence_element_ids AS evidence_element_id
+MATCH (evidence:Evidence)-[:FROM_MEMORY]->(memory:Mem0Memory {
+    collection_name: $collection_name,
+    scope_key: $scope_key,
+    memory_id: $memory_id
+})
+WHERE elementId(evidence) = evidence_element_id
+DETACH DELETE evidence
+RETURN count(*) AS evidence_deleted
+"""
+
+RETRACT_UNSUPPORTED_ASSERTIONS_QUERY = """
+UNWIND $assertion_element_ids AS assertion_element_id
+MATCH (assertion:RelationshipAssertion {
+    collection_name: $collection_name,
+    scope_key: $scope_key
+})
+WHERE elementId(assertion) = assertion_element_id
+  AND NOT EXISTS { MATCH (assertion)-[:SUPPORTED_BY]->(:Evidence) }
+SET
+    assertion.state = 'RETRACTED',
+    assertion.invalidated_at = $recorded_at,
+    assertion.updated_at = $recorded_at
+RETURN count(*) AS assertions_retracted
+"""
+
 _SUPPORTED_URI_SCHEMES = (
     "bolt://",
     "bolt+s://",
@@ -312,6 +396,10 @@ class ProjectionConflictError(RuntimeError):
     """Raised when a memory ID is replayed with a different canonical hash."""
 
 
+class GraphLifecycleConflictError(RuntimeError):
+    """Raised when a stale or missing lifecycle target fails its hash guard."""
+
+
 class Neo4jSchemaAdapter:
     """Own a Neo4j driver and apply the relationship-graph schema."""
 
@@ -372,6 +460,55 @@ class Neo4jSchemaAdapter:
             records = session.execute_write(self._project_relationships, parameter_batch)
         return [ProjectionResult.model_validate(dict(record)) for record in records]
 
+    def replace_relationships(
+        self,
+        relationships: list[RelationshipCandidate],
+        source: ProjectionSource,
+        *,
+        previous_hash: str,
+    ) -> GraphUpdateMutation:
+        """Atomically replace one memory version's evidence after validation."""
+        if self._closed:
+            raise RuntimeError("cannot update graph memory with a closed Neo4j adapter")
+        normalized_previous_hash = _require_non_empty(previous_hash, "previous_hash")
+        if normalized_previous_hash == source.memory_hash:
+            raise ValueError("source memory_hash must differ from previous_hash")
+        parameters = {
+            **_provenance_scope_parameters(source.collection_name, source.scope),
+            "memory_id": source.memory_id,
+            "previous_hash": normalized_previous_hash,
+            "memory_hash": source.memory_hash,
+            "recorded_at": _isoformat(source.recorded_at),
+        }
+        parameter_batch = [_projection_parameters(relationship, source) for relationship in relationships]
+        with self._driver.session(database=self.config.database) as session:
+            result = session.execute_write(self._replace_relationships, parameters, parameter_batch)
+        return GraphUpdateMutation.model_validate(result)
+
+    def delete_memory(
+        self,
+        *,
+        collection_name: str,
+        scope: GraphScope,
+        memory_id: str,
+        memory_hash: str,
+        deleted_at: datetime,
+    ) -> GraphLifecycleMutation:
+        """Hard-delete one memory's evidence and tombstone its graph reference."""
+        if self._closed:
+            raise RuntimeError("cannot delete graph memory with a closed Neo4j adapter")
+        if deleted_at.tzinfo is None or deleted_at.utcoffset() is None:
+            raise ValueError("deleted_at must include a timezone")
+        parameters = {
+            **_provenance_scope_parameters(collection_name, scope),
+            "memory_id": _require_non_empty(memory_id, "memory_id"),
+            "memory_hash": _require_non_empty(memory_hash, "memory_hash"),
+            "deleted_at": _isoformat(deleted_at),
+        }
+        with self._driver.session(database=self.config.database) as session:
+            result = session.execute_write(self._delete_memory, parameters)
+        return GraphLifecycleMutation.model_validate(result)
+
     @classmethod
     def _project_relationships(
         cls,
@@ -379,6 +516,104 @@ class Neo4jSchemaAdapter:
         parameter_batch: list[Mapping[str, Any]],
     ) -> list[Mapping[str, Any]]:
         return [cls._project_relationship(transaction, parameters) for parameters in parameter_batch]
+
+    @classmethod
+    def _replace_relationships(
+        cls,
+        transaction: Neo4jTransaction,
+        parameters: Mapping[str, Any],
+        parameter_batch: list[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        target = cls._lifecycle_target(
+            transaction,
+            {**parameters, "memory_hash": parameters["previous_hash"]},
+        )
+        updated = transaction.run(UPDATE_MEMORY_VERSION_QUERY.strip(), **parameters).single()
+        if updated is None:
+            raise GraphLifecycleConflictError("graph memory update target changed during its transaction")
+        projections = [cls._project_relationship(transaction, item) for item in parameter_batch]
+        evidence_deleted = cls._delete_evidence(transaction, parameters, target["evidence_element_ids"])
+        assertions_retracted = cls._retract_assertions(
+            transaction,
+            parameters,
+            target["assertion_element_ids"],
+            parameters["recorded_at"],
+        )
+        return {
+            "memory_id": parameters["memory_id"],
+            "evidence_deleted": evidence_deleted,
+            "assertions_retracted": assertions_retracted,
+            "projections": projections,
+        }
+
+    @classmethod
+    def _delete_memory(
+        cls,
+        transaction: Neo4jTransaction,
+        parameters: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        target = cls._lifecycle_target(transaction, parameters)
+        deleted = transaction.run(MARK_MEMORY_DELETED_QUERY.strip(), **parameters).single()
+        if deleted is None:
+            raise GraphLifecycleConflictError("graph memory delete target changed during its transaction")
+        evidence_deleted = cls._delete_evidence(transaction, parameters, target["evidence_element_ids"])
+        assertions_retracted = cls._retract_assertions(
+            transaction,
+            parameters,
+            target["assertion_element_ids"],
+            parameters["deleted_at"],
+        )
+        return {
+            "memory_id": parameters["memory_id"],
+            "evidence_deleted": evidence_deleted,
+            "assertions_retracted": assertions_retracted,
+        }
+
+    @staticmethod
+    def _lifecycle_target(
+        transaction: Neo4jTransaction,
+        parameters: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        record = transaction.run(LIFECYCLE_TARGET_QUERY.strip(), **parameters).single()
+        if record is None:
+            raise GraphLifecycleConflictError(
+                "graph memory does not exist at the expected collection, scope, ID, and hash"
+            )
+        return record
+
+    @staticmethod
+    def _delete_evidence(
+        transaction: Neo4jTransaction,
+        parameters: Mapping[str, Any],
+        evidence_element_ids: list[str],
+    ) -> int:
+        if not evidence_element_ids:
+            return 0
+        record = transaction.run(
+            DELETE_MEMORY_EVIDENCE_QUERY.strip(),
+            **parameters,
+            evidence_element_ids=evidence_element_ids,
+        ).single()
+        return 0 if record is None else int(record["evidence_deleted"])
+
+    @staticmethod
+    def _retract_assertions(
+        transaction: Neo4jTransaction,
+        parameters: Mapping[str, Any],
+        assertion_element_ids: list[str],
+        recorded_at: str,
+    ) -> int:
+        if not assertion_element_ids:
+            return 0
+        record = transaction.run(
+            RETRACT_UNSUPPORTED_ASSERTIONS_QUERY.strip(),
+            **{
+                **parameters,
+                "assertion_element_ids": assertion_element_ids,
+                "recorded_at": recorded_at,
+            },
+        ).single()
+        return 0 if record is None else int(record["assertions_retracted"])
 
     def provenance_by_assertion(
         self,

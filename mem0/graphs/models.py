@@ -234,6 +234,22 @@ class ProjectionResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+class GraphLifecycleMutation(BaseModel):
+    """Counts returned by one exact-scope lifecycle mutation."""
+
+    memory_id: str
+    evidence_deleted: int = Field(ge=0)
+    assertions_retracted: int = Field(ge=0)
+
+    model_config = ConfigDict(frozen=True)
+
+
+class GraphUpdateMutation(GraphLifecycleMutation):
+    """Atomic replacement result including new projection identities."""
+
+    projections: tuple[ProjectionResult, ...]
+
+
 class ProjectedEntity(BaseModel):
     """Entity fields returned with relationship provenance."""
 

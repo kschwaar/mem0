@@ -245,3 +245,101 @@ def test_memory_inspection_classifies_normal_and_malformed_records_against_neo4j
             )
             is GraphMemoryState.INCOMPLETE
         )
+
+
+def test_lifecycle_preserves_shared_assertions_and_hard_deletes_target_evidence_against_neo4j_5():
+    pytest.importorskip("neo4j")
+    graph_config = Neo4jGraphConfig(
+        uri=os.environ["MEM0_TEST_NEO4J_URI"],
+        username=os.environ.get("MEM0_TEST_NEO4J_USERNAME", "neo4j"),
+        password=os.environ["MEM0_TEST_NEO4J_PASSWORD"],
+        database=os.environ.get("MEM0_TEST_NEO4J_DATABASE", "neo4j"),
+    )
+    relationship = RelationshipCandidate(
+        subject={"text": "Alice", "semantic_type": "PERSON"},
+        predicate="works_at",
+        object={"text": "Acme", "semantic_type": "ORG"},
+        confidence=0.9,
+    )
+    replacement = RelationshipCandidate(
+        subject={"text": "Alice", "semantic_type": "PERSON"},
+        predicate="works_at",
+        object={"text": "Beta", "semantic_type": "ORG"},
+        confidence=0.9,
+    )
+    shared = {
+        "collection_name": "lifecycle-integration-test",
+        "scope": {"user_id": "lifecycle-user"},
+        "excerpt_hash": excerpt_sha256("Alice works at Acme"),
+        "source_kind": SourceKind.USER,
+        "extractor_name": "test-extractor",
+        "extractor_version": "1",
+    }
+    first = ProjectionSource(memory_id="lifecycle-memory-1", memory_hash="hash-1", **shared)
+    second = ProjectionSource(memory_id="lifecycle-memory-2", memory_hash="hash-2", **shared)
+
+    with Neo4jSchemaAdapter.connect(graph_config) as adapter:
+        adapter.bootstrap_schema()
+        first_projection = adapter.project_relationship(relationship, first)
+        adapter.project_relationship(relationship, second)
+
+        deletion = adapter.delete_memory(
+            collection_name=first.collection_name,
+            scope=first.scope,
+            memory_id=first.memory_id,
+            memory_hash=first.memory_hash,
+            deleted_at=first.recorded_at,
+        )
+        assert deletion.evidence_deleted == 1
+        assert deletion.assertions_retracted == 0
+        assert (
+            adapter.provenance_by_memory(
+                collection_name=first.collection_name,
+                scope=first.scope,
+                memory_id=first.memory_id,
+            )
+            == []
+        )
+        second_provenance = adapter.provenance_by_memory(
+            collection_name=second.collection_name,
+            scope=second.scope,
+            memory_id=second.memory_id,
+        )
+        assert len(second_provenance) == 1
+        assert second_provenance[0].assertion_id == first_projection.assertion_id
+        assert second_provenance[0].state.value == "ACTIVE"
+
+        updated_source = second.model_copy(
+            update={
+                "memory_hash": "hash-2-updated",
+                "excerpt_hash": excerpt_sha256("Alice works at Beta"),
+            }
+        )
+        update = adapter.replace_relationships([replacement], updated_source, previous_hash=second.memory_hash)
+        assert update.evidence_deleted == 1
+        assert update.assertions_retracted == 1
+        assert len(update.projections) == 1
+        updated_provenance = adapter.provenance_by_memory(
+            collection_name=updated_source.collection_name,
+            scope=updated_source.scope,
+            memory_id=updated_source.memory_id,
+        )
+        assert len(updated_provenance) == 1
+        assert updated_provenance[0].memory_hash == updated_source.memory_hash
+        assert updated_provenance[0].object.display_name == "Beta"
+
+        with adapter._driver.session(database=graph_config.database) as session:
+            counts = session.run(
+                """
+                MATCH (memory:Mem0Memory {
+                    collection_name: $collection_name,
+                    scope_key: $scope_key
+                })
+                OPTIONAL MATCH (evidence:Evidence)-[:FROM_MEMORY]->(memory)
+                RETURN count(DISTINCT memory) AS memories,
+                       count(DISTINCT evidence) AS evidence
+                """,
+                collection_name=first.collection_name,
+                scope_key=first.scope.key,
+            ).single()
+        assert dict(counts) == {"memories": 2, "evidence": 1}
