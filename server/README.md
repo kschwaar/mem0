@@ -148,13 +148,17 @@ MEM0_BASE_URL=http://localhost:8888 MEM0_API_KEY='<api-key>' mem0 add 'I prefer 
 MEM0_BASE_URL=http://localhost:8888 MEM0_API_KEY='<api-key>' mem0 search 'local memory' --user-id local-test --app-id mem0-local
 ```
 
-Point `integrations/mem0-plugin` at localhost:
+Point the shared agent-plugin runtime at localhost. `MEM0_API_URL` is the current
+plugin setting; this downstream branch also accepts `MEM0_BASE_URL` as a
+backward-compatible alias used by the CLIs:
 
 ```bash
-export MEM0_BASE_URL=http://localhost:8888
-export MEM0_MCP_URL=http://localhost:8888/mcp
+export MEM0_API_URL=http://localhost:8888
 export MEM0_API_KEY='<api-key>'
 ```
+
+The current native plugins run their own stdio MCP server, so a separate
+`MEM0_MCP_URL` is no longer required.
 
 Hosted Platform-only request fields such as `rerank`, `keyword_search`,
 `fields`, `categories`, `immutable`, and `source` are accepted for local

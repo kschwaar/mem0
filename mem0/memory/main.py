@@ -2159,6 +2159,12 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
             logger.error(f"Error generating procedural memory summary: {e}")
             raise
 
+        if not procedural_memory:
+            raise ValueError(
+                "The LLM returned no content for the procedural memory summary. "
+                "The model may have declined the request or returned an empty response."
+            )
+
         if metadata is None:
             raise ValueError("Metadata cannot be done for procedural memory.")
 
@@ -3951,6 +3957,12 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         except Exception as e:
             logger.error(f"Error generating procedural memory summary: {e}")
             raise
+
+        if not procedural_memory:
+            raise ValueError(
+                "The LLM returned no content for the procedural memory summary. "
+                "The model may have declined the request or returned an empty response."
+            )
 
         if metadata is None:
             raise ValueError("Metadata cannot be done for procedural memory.")

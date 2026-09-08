@@ -2,12 +2,13 @@
 
 This note maps the API contracts needed to make the `server/` self-hosted stack
 usable as the memory backend for local coding agents and local AI applications.
-The intended MCP client is `integrations/mem0-plugin`; OpenMemory is not a
-target for this work.
+The intended clients are the native and portable agent plugins built from
+`integrations/agent-plugin-core`; OpenMemory is not a target for this work.
 
-## Why `/mcp` and `/v3` are missing
+## Historical gap addressed by the adapter
 
-The repository currently has two separate localhost-oriented stacks:
+Before the downstream compatibility adapter was added, the repository had two
+separate localhost-oriented stacks:
 
 - `server/`: the newer self-hosted FastAPI server plus dashboard. It exposes
   synchronous OSS-style REST endpoints such as `POST /memories` and
@@ -25,10 +26,9 @@ The hosted Mem0 Platform exposes a different public surface:
   `delete_memory`, `delete_all_memories`, `delete_entities`, `list_entities`,
   `list_events`, and `get_event_status`.
 
-So the missing routes are not accidental typos. The self-hosted `server/` stack
-does not yet implement a Platform-compatible adapter layer or MCP transport.
-Do not solve this by running or reviving OpenMemory; add the compatible REST and
-MCP surfaces to `server/` and point `integrations/mem0-plugin` at that service.
+The missing routes were therefore not accidental typos. The adapter implemented
+the compatible REST and MCP surfaces directly in `server/`; OpenMemory was not
+revived for this purpose.
 
 ## Existing self-hosted server contract
 
@@ -64,10 +64,9 @@ Management routes:
 | `GET /requests` | Admin-only API request log for dashboard. |
 | `GET/POST /configure`, `GET /configure/providers` | Runtime Mem0 config. |
 
-## Installed Node CLI contract
+## Node CLI contract
 
-The installed `mem0` CLI is Node CLI v0.2.10. It can be pointed at localhost
-without code changes:
+The `mem0` CLI can be pointed at localhost without code changes:
 
 ```bash
 mem0 config set platform.base_url http://localhost:8888
@@ -103,7 +102,7 @@ Expected CLI endpoints:
 | list events | `GET /v1/events/` | returns array or `{results:[...]}` |
 | event status | `GET /v1/event/{event_id}/` | returns event record |
 
-Key gaps against the current server:
+The original gaps addressed by the adapter were:
 
 - Auth header mismatch: CLI sends `Authorization: Token ...`; server accepts
   `X-API-Key` or Bearer JWT.
@@ -111,23 +110,25 @@ Key gaps against the current server:
 - Missing `/v3/memories/add/`, `/v3/memories/search/`, `/v3/memories/`.
 - Missing `/v1/memories/...` compatibility routes.
 - Missing `/v1/entities/`, `/v2/entities/...`.
-- Current server does not support `app_id`; CLI and plugin use `app_id` heavily.
-- Current server has no async event table; Platform `add` returns `PENDING` and an
+- The server did not support `app_id`; the CLI and plugins use `app_id` heavily.
+- The server had no async event table; Platform `add` returns `PENDING` and an
   `event_id`, while the self-hosted server currently returns the synchronous
   `Memory.add(...)` result. The CLI tolerates both for add display, but `mem0
   event ...` needs event routes if we want full compatibility.
 
 ## Plugin and MCP contract
 
-The bundled `integrations/mem0-plugin` currently assumes hosted Platform APIs:
+The current agent-plugin family bundles a shared runtime from
+`integrations/agent-plugin-core` into native editor-specific directories and a
+portable `integrations/mem0-agent-plugin` package:
 
-- MCP config files point to `https://mcp.mem0.ai/mcp`.
-- Hooks and helper scripts hardcode `https://api.mem0.ai`, especially
-  `POST /v3/memories/add/` and `POST /v3/memories/search/`.
-- The helper scripts use the same `Authorization: Token <MEM0_API_KEY>` header
-  as the CLI.
-- Hook metadata uses `app_id` as the project scope and `run_id` as the session
-  scope.
+- Each plugin runs a local stdio MCP server rather than pointing its manifest at
+  the hosted remote MCP endpoint.
+- Hooks and MCP tools use `MEM0_API_URL`, defaulting to
+  `https://api.mem0.ai`. This downstream branch also accepts `MEM0_BASE_URL` as
+  a compatibility alias.
+- Requests use the same `Authorization: Token <MEM0_API_KEY>` header as the CLI.
+- Memory metadata uses `app_id` as project scope and `run_id` as session scope.
 
 The official hosted MCP tool names are:
 
@@ -158,11 +159,11 @@ a drop-in match:
   - `delete_memories(memory_ids)`
   - `delete_all_memories()`
 
-For the current plugin, changing only MCP config is not enough because the hooks
-also call hosted REST directly. The plugin should either:
-
-1. read a `MEM0_BASE_URL` / `MEM0_MCP_URL` setting and call localhost, or
-2. keep MCP-only configuration and disable/replace the direct REST hooks.
+The current plugin family uses a shared local runtime and a stdio MCP server.
+Both hooks and MCP tools therefore use the same REST endpoint. Set
+`MEM0_API_URL` to call localhost; this downstream branch also honors the CLI's
+`MEM0_BASE_URL` name as a backward-compatible alias. `MEM0_API_URL` takes
+precedence when both are set.
 
 ## Implemented server adapter
 
@@ -198,11 +199,13 @@ Implemented:
   - Implemented directly under `server/` at `POST/GET/DELETE /mcp`.
   - Exposes hosted-compatible tool names listed above.
   - Reuses server auth.
-- `integrations/mem0-plugin`:
-  - REST helper scripts use `MEM0_BASE_URL`, defaulting to hosted.
-  - MCP config templates use `MEM0_MCP_URL`, defaulting to hosted.
-  - Local use: `MEM0_BASE_URL=http://localhost:8888` and
-    `MEM0_MCP_URL=http://localhost:8888/mcp`.
+- Agent plugins:
+  - Shared behavior lives in `integrations/agent-plugin-core` and is bundled
+    into the native plugin directories.
+  - Hooks and the local stdio MCP server use `MEM0_API_URL`, defaulting to
+    hosted Mem0.
+  - `MEM0_BASE_URL` remains available as a downstream compatibility alias.
+  - Local use: `MEM0_API_URL=http://localhost:8888`.
 
 Local compatibility no-ops: hosted-only fields such as `rerank`,
 `keyword_search`, `fields`, `categories`, `immutable`, and `source` are accepted
@@ -213,8 +216,9 @@ where the CLI/plugin send them. Fields without an OSS equivalent are ignored.
 The smallest useful target for local coding agents is:
 
 - CLI works for `status`, `add`, `search`, `list`, `get`, `update`, `delete`.
-- `integrations/mem0-plugin` registers MCP against `MEM0_MCP_URL=http://localhost:8888/mcp`.
-- Plugin hooks work against `MEM0_BASE_URL=http://localhost:8888`.
+- The native agent plugins run their bundled stdio MCP server against
+  `MEM0_API_URL=http://localhost:8888`.
+- Plugin hooks use the same `MEM0_API_URL` endpoint.
 - MCP exposes at least `add_memory`, `search_memories`, `get_memories`, and
   `delete_memory` at `http://localhost:8888/mcp`.
 
