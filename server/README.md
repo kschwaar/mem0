@@ -113,6 +113,26 @@ The default Docker Compose stack uses Postgres/pgvector. For a heavier local
 memory stack with Qdrant, Neo4j, and local HuggingFace reranking, opt into the
 `local-memory` profile and select the matching providers through env vars:
 
+After configuring these values in `server/.env`, the normal start command is:
+
+```bash
+cd server
+make local-up
+```
+
+If Docker reports `network ... not found`, its retained containers refer to an
+obsolete Compose network. Recreate the project containers and network with:
+
+```bash
+make local-recover
+```
+
+This preserves the named PostgreSQL, Qdrant, Neo4j, and HuggingFace cache
+volumes. It does not run `docker compose down -v`; `make clean` remains the
+explicit destructive cleanup command.
+
+The equivalent one-off configuration is:
+
 ```bash
 cd server
 MEM0_VECTOR_STORE_PROVIDER=qdrant \
@@ -127,9 +147,26 @@ docker compose --profile local-memory up --build
 This starts Qdrant on `localhost:6333` and Neo4j on `localhost:7475`/`7688`.
 HuggingFace model files are cached in the `huggingface_cache` Docker volume.
 
-Neo4j is available to the profile as a backing service. Graph memory requires a
-Mem0 SDK build that supports `graph_store`; builds without that config support
-will ignore the graph settings while still using Qdrant and the reranker.
+Selecting `MEM0_GRAPH_STORE_PROVIDER=neo4j` enables the SDK's relationship graph:
+canonical vector memories remain the source of truth, successful writes are
+projected asynchronously to Neo4j, and matching graph evidence reranks only the
+bounded candidates returned by semantic search. The server also accepts the
+dedicated `MEM0_GRAPH_NEO4J_URI`, `MEM0_GRAPH_NEO4J_USERNAME`,
+`MEM0_GRAPH_NEO4J_PASSWORD`, and `MEM0_GRAPH_NEO4J_DATABASE` variables; these
+take precedence over the shorter `NEO4J_*` Compose settings. The Docker setup
+uses a five-second Neo4j transaction timeout by default; override it with
+`MEM0_GRAPH_QUERY_TIMEOUT_SECONDS`.
+
+Verify the live Neo4j projection and retrieval lifecycle without consuming LLM
+tokens:
+
+```bash
+docker compose exec mem0 python scripts/smoke_relationship_graph.py
+```
+
+The smoke test checks idempotent projection, exact-scope isolation, semantic
+candidate bounding, relationship replacement, and deletion, then removes its
+temporary graph collection.
 
 ## Local CLI and MCP Compatibility
 

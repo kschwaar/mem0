@@ -37,11 +37,10 @@ from server_state import (
     set_session_factory,
     update_config,
 )
+from relationship_graph_config import build_relationship_graph_config
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import func, select
-
-from mem0.exceptions import ValidationError as Mem0ValidationError
 
 load_dotenv()
 
@@ -187,15 +186,9 @@ if RERANKER_PROVIDER == "huggingface":
         },
     }
 
-if GRAPH_STORE_PROVIDER == "neo4j":
-    DEFAULT_CONFIG["graph_store"] = {
-        "provider": "neo4j",
-        "config": {
-            "url": os.environ.get("NEO4J_URL", "bolt://neo4j-mem0:7687"),
-            "username": os.environ.get("NEO4J_USERNAME", "neo4j"),
-            "password": os.environ.get("NEO4J_PASSWORD", ""),
-        },
-    }
+relationship_graph_config = build_relationship_graph_config(GRAPH_STORE_PROVIDER)
+if relationship_graph_config is not None:
+    DEFAULT_CONFIG["relationship_graph"] = relationship_graph_config
 
 
 set_session_factory(SessionLocal)
