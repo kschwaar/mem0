@@ -90,7 +90,7 @@ def test_v3_add_preserves_app_id_in_metadata_and_returns_event(monkeypatch):
     assert fake.add_calls[0]["metadata"]["app_id"] == "proj"
 
 
-def test_v3_search_maps_app_id_to_metadata_filter(monkeypatch):
+def test_v3_search_preserves_app_id_filter(monkeypatch):
     client, fake = make_client(monkeypatch)
 
     response = client.post(
@@ -99,7 +99,7 @@ def test_v3_search_maps_app_id_to_metadata_filter(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert fake.search_calls[0]["filters"] == {"AND": [{"user_id": "u1"}, {"metadata": {"app_id": "proj"}}]}
+    assert fake.search_calls[0]["filters"] == {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]}
 
 
 def test_v1_aliases_get_update_delete(monkeypatch):
