@@ -47,6 +47,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install local Mem0 graph SDK
+        run: pip install -e ".[graphs]"
+
       - name: Install dev dependencies
         working-directory: cli/python
         run: pip install -e ".[dev]"
