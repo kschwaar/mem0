@@ -176,17 +176,28 @@ def test_token_auth_uses_api_key_resolver(monkeypatch):
     import auth
 
     seen = {}
+    database = object()
+
+    class SessionContext:
+        def __enter__(self):
+            return database
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return None
 
     def fake_resolve(key, db):
         seen["key"] = key
+        seen["db"] = db
         return SimpleNamespace(email="local@example.com", role="admin")
 
     request = SimpleNamespace(state=SimpleNamespace(), headers={"authorization": "Token m0sk_local"})
     credentials = SimpleNamespace(scheme="Token", credentials="m0sk_local")
     monkeypatch.setattr(auth, "_resolve_user_from_api_key", fake_resolve)
+    monkeypatch.setattr(auth, "SessionLocal", SessionContext)
 
-    user = asyncio.run(auth.verify_auth(request, credentials=credentials, db=object()))
+    user = asyncio.run(auth.verify_auth(request, credentials=credentials))
 
     assert user.email == "local@example.com"
     assert seen["key"] == "m0sk_local"
+    assert seen["db"] is database
     assert request.state.auth_type == "api_key"
