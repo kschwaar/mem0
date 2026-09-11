@@ -61,15 +61,13 @@ def extract_entity_filters(filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def normalize_platform_filters(filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Map hosted Platform app_id filters to the OSS metadata-backed shape."""
+    """Normalize hosted Platform filters for the OSS memory payload shape."""
     if not isinstance(filters, dict):
         return {}
     normalized: Dict[str, Any] = {}
     for key, value in filters.items():
         if key in {"AND", "OR", "NOT"} and isinstance(value, list):
             normalized[key] = [normalize_platform_filters(item) if isinstance(item, dict) else item for item in value]
-        elif key == "app_id":
-            normalized["metadata"] = {"app_id": value}
         else:
             normalized[key] = value
     return normalized

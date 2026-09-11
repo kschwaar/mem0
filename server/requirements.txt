@@ -1,7 +1,7 @@
 fastapi==0.115.8
 uvicorn==0.34.0
-mcp[cli]>=1.25.4
-pydantic[email]==2.10.4
+mcp[cli]>=1.25.0,<2.0
+pydantic[email]==2.12.5
 mem0ai>=0.1.48
 python-dotenv==1.2.2
 psycopg>=3.2.8

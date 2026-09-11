@@ -90,7 +90,7 @@ def test_v3_add_preserves_app_id_in_metadata_and_returns_event(monkeypatch):
     assert fake.add_calls[0]["metadata"]["app_id"] == "proj"
 
 
-def test_v3_search_maps_app_id_to_metadata_filter(monkeypatch):
+def test_v3_search_preserves_app_id_filter(monkeypatch):
     client, fake = make_client(monkeypatch)
 
     response = client.post(
@@ -99,7 +99,7 @@ def test_v3_search_maps_app_id_to_metadata_filter(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert fake.search_calls[0]["filters"] == {"AND": [{"user_id": "u1"}, {"metadata": {"app_id": "proj"}}]}
+    assert fake.search_calls[0]["filters"] == {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]}
 
 
 def test_v1_aliases_get_update_delete(monkeypatch):
@@ -176,17 +176,28 @@ def test_token_auth_uses_api_key_resolver(monkeypatch):
     import auth
 
     seen = {}
+    database = object()
+
+    class SessionContext:
+        def __enter__(self):
+            return database
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return None
 
     def fake_resolve(key, db):
         seen["key"] = key
+        seen["db"] = db
         return SimpleNamespace(email="local@example.com", role="admin")
 
     request = SimpleNamespace(state=SimpleNamespace(), headers={"authorization": "Token m0sk_local"})
     credentials = SimpleNamespace(scheme="Token", credentials="m0sk_local")
     monkeypatch.setattr(auth, "_resolve_user_from_api_key", fake_resolve)
+    monkeypatch.setattr(auth, "SessionLocal", SessionContext)
 
-    user = asyncio.run(auth.verify_auth(request, credentials=credentials, db=object()))
+    user = asyncio.run(auth.verify_auth(request, credentials=credentials))
 
     assert user.email == "local@example.com"
     assert seen["key"] == "m0sk_local"
+    assert seen["db"] is database
     assert request.state.auth_type == "api_key"

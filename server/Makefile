@@ -1,4 +1,4 @@
-.PHONY: up down clean logs seed wait-api wait-dashboard bootstrap health build run_local reset-admin-password prune-logs
+.PHONY: up local-up local-recover down clean logs seed wait-api wait-dashboard bootstrap health build run_local reset-admin-password prune-logs
 
 OUTPUT ?= text
 API_URL ?= http://localhost:8888
@@ -19,6 +19,17 @@ up:
 	@echo "Stack is ready."
 	@echo "  Dashboard:  $(DASHBOARD_URL)  <- open this to run the setup wizard"
 	@echo "  API:        $(API_URL)"
+
+local-up:
+	docker compose --profile local-memory up -d
+	@$(MAKE) --no-print-directory wait-api
+	@$(MAKE) --no-print-directory wait-dashboard
+	@echo "Local memory stack is ready (API, dashboard, Postgres, Qdrant, and Neo4j)."
+
+local-recover:
+	@echo "Recreating the local stack and Compose network; named data volumes are preserved."
+	docker compose --profile local-memory down --remove-orphans
+	@$(MAKE) --no-print-directory local-up
 
 down:
 	docker compose down

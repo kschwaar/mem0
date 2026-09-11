@@ -5,14 +5,14 @@ from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
-from rich.console import Console
-from typer import Exit
-
 from mem0.graphs.backfill import BackfillCheckpoint, BackfillStatus
 from mem0.graphs.extractors import ExtractorIdentity
 from mem0.graphs.models import GraphScope
 from mem0.graphs.operations import ProjectionReconciliationReport, ProjectionWorkerHealth
 from mem0.graphs.outbox import ProjectionOutboxStats
+from rich.console import Console
+from typer import Exit
+
 from mem0_cli.commands import graph as graph_command
 
 

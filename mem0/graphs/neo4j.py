@@ -499,17 +499,6 @@ class Neo4jTransaction(Protocol):
     def run(self, query: Any, **parameters: Any) -> Neo4jResult: ...
 
 
-class _TimedTransaction:
-    def __init__(self, transaction: Neo4jTransaction, query_factory: Callable[[str, float], Any], timeout: float):
-        self._transaction = transaction
-        self._query_factory = query_factory
-        self._timeout = timeout
-
-    def run(self, query: Any, **parameters: Any) -> Neo4jResult:
-        timed_query = self._query_factory(query, self._timeout) if isinstance(query, str) else query
-        return self._transaction.run(timed_query, **parameters)
-
-
 class Neo4jSession(Protocol):
     def __enter__(self) -> "Neo4jSession": ...
 
@@ -1011,9 +1000,12 @@ class Neo4jSchemaAdapter:
 
     def _timed_callback(self, callback: Callable[..., Any]) -> Callable[..., Any]:
         def execute(transaction: Neo4jTransaction, *args: Any) -> Any:
-            timed = _TimedTransaction(transaction, self._query_factory, self.config.query_timeout_seconds)
-            return callback(timed, *args)
+            return callback(transaction, *args)
 
+        # The Neo4j driver reads this attribute when opening the managed
+        # transaction. Query objects are only accepted by session.run(), not
+        # transaction.run().
+        setattr(execute, "timeout", self.config.query_timeout_seconds)
         return execute
 
     def reset_collection(self, collection_name: str) -> int:

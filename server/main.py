@@ -37,11 +37,10 @@ from server_state import (
     set_session_factory,
     update_config,
 )
+from relationship_graph_config import build_relationship_graph_config
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import func, select
-
-from mem0.exceptions import ValidationError as Mem0ValidationError
 
 load_dotenv()
 
@@ -187,15 +186,9 @@ if RERANKER_PROVIDER == "huggingface":
         },
     }
 
-if GRAPH_STORE_PROVIDER == "neo4j":
-    DEFAULT_CONFIG["graph_store"] = {
-        "provider": "neo4j",
-        "config": {
-            "url": os.environ.get("NEO4J_URL", "bolt://neo4j-mem0:7687"),
-            "username": os.environ.get("NEO4J_USERNAME", "neo4j"),
-            "password": os.environ.get("NEO4J_PASSWORD", ""),
-        },
-    }
+relationship_graph_config = build_relationship_graph_config(GRAPH_STORE_PROVIDER)
+if relationship_graph_config is not None:
+    DEFAULT_CONFIG["relationship_graph"] = relationship_graph_config
 
 
 set_session_factory(SessionLocal)
@@ -479,7 +472,7 @@ def get_all_memories(
             return _list_all_memories(limit=top_k if top_k is not None else ALL_MEMORIES_LIMIT)
         filters = {k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v}
         if app_id:
-            filters["metadata"] = {"app_id": app_id}
+            filters["app_id"] = app_id
         params = {"filters": filters}
         if top_k is not None:
             params["top_k"] = top_k
@@ -510,7 +503,7 @@ def search_memories(search_req: SearchRequest, _auth=Depends(verify_auth)):
             entity_val = getattr(search_req, entity_key, None)
             if entity_val:
                 if entity_key == "app_id":
-                    filters["metadata"] = {"app_id": entity_val}
+                    filters["app_id"] = entity_val
                 else:
                     filters[entity_key] = entity_val
                 deprecated_keys.append(entity_key)
@@ -592,7 +585,7 @@ def delete_all_memories(
     try:
         if app_id:
             filters = {k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v}
-            filters["metadata"] = {"app_id": app_id}
+            filters["app_id"] = app_id
             response = get_memory_instance().get_all(filters=filters, top_k=ALL_MEMORIES_LIMIT, show_expired=True)
             for item in response.get("results", []):
                 if item.get("id"):
