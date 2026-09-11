@@ -131,5 +131,7 @@ def test_candidate_read_applies_configured_transaction_timeout():
         explanation_limit=2,
     )
 
-    assert calls == [0.25]
+    callback = adapter._driver.session.return_value.__enter__.return_value.execute_read.call_args.args[0]
+    assert callback.timeout == 0.25
+    assert calls == []
     assert transaction.calls[0][0] == READ_CANDIDATE_SIGNALS_QUERY.strip()
