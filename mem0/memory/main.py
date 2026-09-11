@@ -2323,8 +2323,9 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         if hasattr(self, "db") and self.db is not None:
             self.db.close()
             self.db = None
-        if self.relationship_graph is not None:
+        if getattr(self, "relationship_graph", None) is not None:
             self.relationship_graph.close()
+            self.relationship_graph = None
 
     def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")
@@ -4132,8 +4133,9 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         if hasattr(self, "db") and self.db is not None:
             self.db.close()
             self.db = None
-        if self.relationship_graph is not None:
+        if getattr(self, "relationship_graph", None) is not None:
             self.relationship_graph.close()
+            self.relationship_graph = None
 
     async def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")
