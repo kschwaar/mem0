@@ -214,6 +214,54 @@ def _validate_and_trim_entity_id(value: Optional[Any], name: str) -> Optional[st
     return trimmed
 
 
+def _normalize_and_validate_scoped_filters(filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize nested entity IDs and require every possible filter branch to be tenant-scoped.
+
+    An identity inside an AND scopes the whole conjunction. Every OR branch must
+    independently contain an identity, while identities under NOT never establish
+    a positive scope. This accepts public nested-filter syntax without allowing an
+    unscoped OR branch to widen a query across tenants.
+    """
+    normalized = deepcopy(filters) if filters else {}
+
+    def normalize(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in list(node.items()):
+                if key in ENTITY_PARAMS:
+                    node[key] = _validate_and_trim_entity_id(value, key)
+                else:
+                    normalize(value)
+        elif isinstance(node, list):
+            for item in node:
+                normalize(item)
+
+    def is_scoped(node: Any) -> bool:
+        if not isinstance(node, dict):
+            return False
+        if any(node.get(key) is not None for key in ENTITY_PARAMS):
+            return True
+
+        and_children = node.get("AND")
+        if isinstance(and_children, list) and any(is_scoped(child) for child in and_children):
+            return True
+
+        or_children = node.get("OR")
+        if isinstance(or_children, list) and or_children:
+            return all(is_scoped(child) for child in or_children)
+
+        # A NOT condition can narrow an already-scoped sibling, but it cannot
+        # establish the positive tenant boundary on its own.
+        return False
+
+    normalize(normalized)
+    if not is_scoped(normalized):
+        raise ValueError(
+            "filters must positively contain at least one of: user_id, agent_id, run_id, "
+            "and every OR branch must be independently scoped. Example: filters={'user_id': 'u1'}"
+        )
+    return normalized
+
+
 def _validate_search_params(threshold: Optional[float] = None, top_k: Optional[int] = None) -> None:
     """
     Validates search parameters.
@@ -1115,10 +1163,36 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
                 existing_hashes.add(h)
 
         records = []  # (memory_id, text, embedding, payload)
+        resolved_memories = []
+        existing_by_id = {mem.id: mem for mem in existing_results}
         seen_hashes = set()  # dedup within the current batch
         for mem in extracted_memories:
             text = mem.get("text")
             if not text or text not in embed_map:
+                continue
+
+            event = str(mem.get("event") or "ADD").upper()
+            if event in {"UPDATE", "DELETE", "NONE"}:
+                memory_id = uuid_mapping.get(str(mem.get("id")))
+                if memory_id is None:
+                    logger.warning("Skipping %s action with unknown existing-memory id: %r", event, mem.get("id"))
+                    continue
+                if event == "UPDATE":
+                    self._update_memory(memory_id, text, embed_map, metadata=deepcopy(metadata))
+                    resolved_memories.append(
+                        {
+                            "id": memory_id,
+                            "memory": text,
+                            "event": "UPDATE",
+                            "previous_memory": mem.get("old_memory") or existing_by_id[memory_id].payload.get("data"),
+                        }
+                    )
+                elif event == "DELETE":
+                    self._delete_memory(memory_id, existing_memory=existing_by_id[memory_id])
+                    resolved_memories.append({"id": memory_id, "memory": text, "event": "DELETE"})
+                continue
+            if event != "ADD":
+                logger.warning("Skipping memory with unsupported event: %r", event)
                 continue
 
             mem_hash = hashlib.md5(text.encode()).hexdigest()
@@ -1144,7 +1218,7 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
 
         if not records:
             self.db.save_messages(messages, session_scope)
-            return []
+            return resolved_memories
 
         graph_events = {
             memory_id: self._prepare_graph_add(memory_id, payload["hash"], payload)
@@ -1305,7 +1379,7 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         # Phase 8: Save messages + return
         self.db.save_messages(messages, session_scope)
 
-        returned_memories = [{"id": r[0], "memory": r[1], "event": "ADD"} for r in records]
+        returned_memories = resolved_memories + [{"id": r[0], "memory": r[1], "event": "ADD"} for r in records]
 
         keys, encoded_ids = process_telemetry_filters(filters)
         capture_event(
@@ -1403,20 +1477,7 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         # Validate top_k
         _validate_search_params(top_k=top_k)
 
-        # Validate and trim entity IDs in filters
-        effective_filters = dict(filters) if filters else {}
-        if "user_id" in effective_filters:
-            effective_filters["user_id"] = _validate_and_trim_entity_id(effective_filters["user_id"], "user_id")
-        if "agent_id" in effective_filters:
-            effective_filters["agent_id"] = _validate_and_trim_entity_id(effective_filters["agent_id"], "agent_id")
-        if "run_id" in effective_filters:
-            effective_filters["run_id"] = _validate_and_trim_entity_id(effective_filters["run_id"], "run_id")
-
-        # Validate filters contains at least one entity ID
-        if not any(key in effective_filters for key in ("user_id", "agent_id", "run_id")):
-            raise ValueError(
-                "filters must contain at least one of: user_id, agent_id, run_id. Example: filters={'user_id': 'u1'}"
-            )
+        effective_filters = _normalize_and_validate_scoped_filters(filters)
 
         limit = top_k
         fetch_limit = limit if show_expired else max(limit * 4, 60)
@@ -1561,18 +1622,7 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         query = _validate_and_trim_search_query(query)
         temporal_usage_notice = detect_temporal_usage_from_search(query, filters)
 
-        # Validate and trim entity IDs in filters
-        effective_filters = filters.copy() if filters else {}
-        if "user_id" in effective_filters:
-            effective_filters["user_id"] = _validate_and_trim_entity_id(effective_filters["user_id"], "user_id")
-        if "agent_id" in effective_filters:
-            effective_filters["agent_id"] = _validate_and_trim_entity_id(effective_filters["agent_id"], "agent_id")
-        if "run_id" in effective_filters:
-            effective_filters["run_id"] = _validate_and_trim_entity_id(effective_filters["run_id"], "run_id")
-        if not any(key in effective_filters for key in ("user_id", "agent_id", "run_id")):
-            raise ValueError(
-                "filters must contain at least one of: user_id, agent_id, run_id. Example: filters={'user_id': 'u1'}"
-            )
+        effective_filters = _normalize_and_validate_scoped_filters(filters)
 
         limit = top_k
         scale_threshold_notice = detect_scale_threshold_from_top_k(top_k)
@@ -2857,10 +2907,38 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
                 existing_hashes.add(h)
 
         records = []
+        resolved_memories = []
+        existing_by_id = {mem.id: mem for mem in existing_results}
         seen_hashes = set()
         for mem in extracted_memories:
             text = mem.get("text")
             if not text or text not in embed_map:
+                continue
+
+            event = str(mem.get("event") or "ADD").upper()
+            if event in {"UPDATE", "DELETE", "NONE"}:
+                memory_id = uuid_mapping.get(str(mem.get("id")))
+                if memory_id is None:
+                    logger.warning(
+                        "Skipping %s action with unknown existing-memory id (async): %r", event, mem.get("id")
+                    )
+                    continue
+                if event == "UPDATE":
+                    await self._update_memory(memory_id, text, embed_map, metadata=deepcopy(metadata))
+                    resolved_memories.append(
+                        {
+                            "id": memory_id,
+                            "memory": text,
+                            "event": "UPDATE",
+                            "previous_memory": mem.get("old_memory") or existing_by_id[memory_id].payload.get("data"),
+                        }
+                    )
+                elif event == "DELETE":
+                    await self._delete_memory(memory_id, existing_memory=existing_by_id[memory_id])
+                    resolved_memories.append({"id": memory_id, "memory": text, "event": "DELETE"})
+                continue
+            if event != "ADD":
+                logger.warning("Skipping memory with unsupported event (async): %r", event)
                 continue
 
             mem_hash = hashlib.md5(text.encode()).hexdigest()
@@ -2886,7 +2964,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
 
         if not records:
             await asyncio.to_thread(self.db.save_messages, messages, session_scope)
-            return []
+            return resolved_memories
 
         graph_events = {}
         for memory_id, _, _, payload in records:
@@ -3060,7 +3138,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         # Phase 8: Save messages + return
         await asyncio.to_thread(self.db.save_messages, messages, session_scope)
 
-        returned_memories = [{"id": r[0], "memory": r[1], "event": "ADD"} for r in records]
+        returned_memories = resolved_memories + [{"id": r[0], "memory": r[1], "event": "ADD"} for r in records]
 
         keys, encoded_ids = process_telemetry_filters(effective_filters)
         capture_event(
@@ -3158,20 +3236,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         # Validate top_k
         _validate_search_params(top_k=top_k)
 
-        # Validate and trim entity IDs in filters
-        effective_filters = dict(filters) if filters else {}
-        if "user_id" in effective_filters:
-            effective_filters["user_id"] = _validate_and_trim_entity_id(effective_filters["user_id"], "user_id")
-        if "agent_id" in effective_filters:
-            effective_filters["agent_id"] = _validate_and_trim_entity_id(effective_filters["agent_id"], "agent_id")
-        if "run_id" in effective_filters:
-            effective_filters["run_id"] = _validate_and_trim_entity_id(effective_filters["run_id"], "run_id")
-
-        # Validate filters contains at least one entity ID
-        if not any(key in effective_filters for key in ("user_id", "agent_id", "run_id")):
-            raise ValueError(
-                "filters must contain at least one of: user_id, agent_id, run_id. Example: filters={'user_id': 'u1'}"
-            )
+        effective_filters = _normalize_and_validate_scoped_filters(filters)
 
         limit = top_k
         fetch_limit = limit if show_expired else max(limit * 4, 60)
@@ -3316,20 +3381,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         query = _validate_and_trim_search_query(query)
         temporal_usage_notice = detect_temporal_usage_from_search(query, filters)
 
-        # Validate and trim entity IDs in filters
-        effective_filters = filters.copy() if filters else {}
-        if "user_id" in effective_filters:
-            effective_filters["user_id"] = _validate_and_trim_entity_id(effective_filters["user_id"], "user_id")
-        if "agent_id" in effective_filters:
-            effective_filters["agent_id"] = _validate_and_trim_entity_id(effective_filters["agent_id"], "agent_id")
-        if "run_id" in effective_filters:
-            effective_filters["run_id"] = _validate_and_trim_entity_id(effective_filters["run_id"], "run_id")
-
-        # Validate filters contains at least one entity ID
-        if not any(key in effective_filters for key in ("user_id", "agent_id", "run_id")):
-            raise ValueError(
-                "filters must contain at least one of: user_id, agent_id, run_id. Example: filters={'user_id': 'u1'}"
-            )
+        effective_filters = _normalize_and_validate_scoped_filters(filters)
 
         limit = top_k
         scale_threshold_notice = detect_scale_threshold_from_top_k(top_k)

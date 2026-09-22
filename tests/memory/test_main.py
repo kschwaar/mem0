@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -7,7 +8,40 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from mem0.exceptions import LLMError
-from mem0.memory.main import AsyncMemory, Memory
+from mem0.memory.main import AsyncMemory, Memory, _normalize_and_validate_scoped_filters
+
+
+def test_nested_identity_filters_are_normalized_without_mutating_input():
+    filters = {
+        "OR": [
+            {"AND": [{"user_id": "  user-1  "}, {"app_id": "repo"}]},
+            {"AND": [{"agent_id": 42}, {"app_id": "repo"}]},
+        ]
+    }
+
+    normalized = _normalize_and_validate_scoped_filters(filters)
+
+    assert normalized == {
+        "OR": [
+            {"AND": [{"user_id": "user-1"}, {"app_id": "repo"}]},
+            {"AND": [{"agent_id": "42"}, {"app_id": "repo"}]},
+        ]
+    }
+    assert filters["OR"][0]["AND"][0]["user_id"] == "  user-1  "
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"app_id": "repo"},
+        {"NOT": [{"user_id": "user-1"}]},
+        {"OR": [{"user_id": "user-1"}, {"app_id": "repo"}]},
+        {"OR": []},
+    ],
+)
+def test_scoped_filter_validation_rejects_unscoped_boolean_branches(filters):
+    with pytest.raises(ValueError, match="every OR branch"):
+        _normalize_and_validate_scoped_filters(filters)
 
 
 def _setup_mocks(mocker):
@@ -101,6 +135,42 @@ class TestAddToVectorStoreErrors:
         # The documented LLMError contract is honoured, and the original
         # provider exception is preserved as the cause for debugging.
         assert isinstance(exc_info.value.__cause__, _ProviderError)
+
+    def test_conflicting_fact_updates_existing_memory_instead_of_adding(self, mocker, mock_memory):
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User prefers Rust"})
+        mock_memory.vector_store.search.return_value = [existing]
+        mock_memory.embedding_model.embed_batch.return_value = [[0.4, 0.5, 0.6]]
+        mock_memory.llm.generate_response.return_value = json.dumps(
+            {
+                "memory": [
+                    {
+                        "id": "0",
+                        "text": "User switched their preferred programming language from Rust to Go",
+                        "event": "UPDATE",
+                        "old_memory": "User prefers Rust",
+                    }
+                ]
+            }
+        )
+        mocker.patch.object(mock_memory, "_update_memory", return_value="memory-1")
+
+        result = mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I switched from Rust to Go"}],
+            metadata={"user_id": "u1"},
+            filters={"user_id": "u1"},
+            infer=True,
+        )
+
+        assert result == [
+            {
+                "id": "memory-1",
+                "memory": "User switched their preferred programming language from Rust to Go",
+                "event": "UPDATE",
+                "previous_memory": "User prefers Rust",
+            }
+        ]
+        mock_memory._update_memory.assert_called_once()
+        mock_memory.vector_store.insert.assert_not_called()
 
 
 class TestPromptOverridesCustomInstructions:
@@ -312,6 +382,42 @@ class TestAsyncAddToVectorStoreErrors:
                 messages=[{"role": "user", "content": "test"}], metadata={}, effective_filters={}, infer=True
             )
         assert isinstance(exc_info.value.__cause__, _ProviderError)
+
+    async def test_async_conflicting_fact_updates_existing_memory_instead_of_adding(self, mocker, mock_async_memory):
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User prefers Rust"})
+        mock_async_memory.vector_store.search.return_value = [existing]
+        mock_async_memory.embedding_model.embed_batch.return_value = [[0.4, 0.5, 0.6]]
+        mock_async_memory.llm.generate_response.return_value = json.dumps(
+            {
+                "memory": [
+                    {
+                        "id": "0",
+                        "text": "User switched their preferred programming language from Rust to Go",
+                        "event": "UPDATE",
+                        "old_memory": "User prefers Rust",
+                    }
+                ]
+            }
+        )
+        mocker.patch.object(mock_async_memory, "_update_memory", new=mocker.AsyncMock(return_value="memory-1"))
+
+        result = await mock_async_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I switched from Rust to Go"}],
+            metadata={"user_id": "u1"},
+            effective_filters={"user_id": "u1"},
+            infer=True,
+        )
+
+        assert result == [
+            {
+                "id": "memory-1",
+                "memory": "User switched their preferred programming language from Rust to Go",
+                "event": "UPDATE",
+                "previous_memory": "User prefers Rust",
+            }
+        ]
+        mock_async_memory._update_memory.assert_awaited_once()
+        mock_async_memory.vector_store.insert.assert_not_called()
 
 
 def _build_memory_instance(mocker, memory_cls):

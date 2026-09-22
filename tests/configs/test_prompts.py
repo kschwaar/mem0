@@ -19,6 +19,12 @@ def test_get_update_memory_messages():
     assert result.startswith(prompts.DEFAULT_UPDATE_MEMORY_PROMPT)
 
 
+def test_v3_extraction_prompt_requires_conflicts_to_update_existing_memory():
+    assert '"event": "UPDATE"' in prompts.ADDITIVE_EXTRACTION_PROMPT
+    assert "mutable fact" in prompts.ADDITIVE_EXTRACTION_PROMPT
+    assert "same existing ID" in prompts.ADDITIVE_EXTRACTION_PROMPT
+
+
 def test_get_update_memory_messages_empty_memory():
     # Test with None for retrieved_old_memory_dict
     result = prompts.get_update_memory_messages(
