@@ -1,6 +1,6 @@
 ---
 title: "Open Source: Migrating to the New Memory Algorithm"
-description: "Guide for self-hosted Mem0 users to upgrade to the new memory algorithm with ADD-only extraction, hybrid search, and entity-aware retrieval."
+description: "Guide for self-hosted Mem0 users to upgrade to the new memory algorithm with single-pass extraction, hybrid search, and entity-aware retrieval."
 icon: "arrow-right"
 iconType: "solid"
 ---
@@ -13,7 +13,7 @@ iconType: "solid"
 
 The new Mem0 release redesigns both extraction and retrieval, and cleans up the SDK surface across Python and TypeScript:
 
-- **Extraction**: Single-pass ADD-only (one LLM call, no UPDATE/DELETE)
+- **Extraction**: Single-pass action-aware extraction in Python (one LLM call chooses ADD/UPDATE/DELETE/NONE); TypeScript remains ADD-only
 - **Retrieval**: Multi-signal hybrid search (semantic + BM25 keyword + entity matching)
 - **Entity matching**: Automatic entity extraction feeds a third scoring signal in hybrid search, boosting memories that share entities with the query
 - **Graph memory moved to Platform**: The external graph store integration is removed from OSS; graph memory is now a built-in, always-on [Mem0 Platform feature](/platform/features/graph-memory)
@@ -35,7 +35,7 @@ These changes produce a **+20 point improvement on LoCoMo** (71.4 → 91.6) and 
 | `rerank` default | `True` | `False` | Pass `rerank=True` to restore |
 | Entity ID validation | Accepted any string | Trimmed; empty / whitespace-only rejected (`ValueError`) | Pass a non-empty identifier without internal spaces |
 | `messages` in `add()` | Could be `None` | Must be `str` / `dict` / `list[dict]`: other types raise `Mem0ValidationError` (code `VALIDATION_003`) | Always pass a string, dict, or list of messages |
-| `add()` events | Returns `ADD`, `UPDATE`, `DELETE` | Returns `ADD` only | Update code expecting UPDATE/DELETE |
+| `add()` events | Returns `ADD`, `UPDATE`, `DELETE` | Python returns `ADD`, `UPDATE`, or `DELETE`; TypeScript returns `ADD` only | Handle the event values supported by your SDK |
 | Custom extraction prompt | `custom_fact_extraction_prompt` | `custom_instructions` | Rename in config |
 | Custom update prompt | `custom_update_memory_prompt` | Deprecated | Use `custom_instructions` instead |
 | Graph memory | `enable_graph` + `graph_store` in config | Removed | Graph memory is removed from OSS. It's a built-in, always-on [Mem0 Platform feature](/platform/features/graph-memory) |
@@ -306,7 +306,7 @@ pip install fastembed
 </Tabs>
 
 <Tip>
-The ADD-only model means memories accumulate over time. When information changes, the new fact is stored alongside the old one. Retrieval handles ranking: the most relevant, current information surfaces first.
+In the Python SDK, a new mutable fact can update an existing memory in place, so current preferences and status fields do not accumulate contradictory rows. Independent events and historical facts still accumulate. The TypeScript OSS SDK remains ADD-only.
 </Tip>
 
 ### 5. Update Vector Store Dependencies
@@ -350,19 +350,19 @@ The old `relations` field on search results (populated by the external graph sto
 
 ## How the New Algorithm Works
 
-### Extraction: Single-Pass ADD-Only
+### Extraction: Single-Pass Action-Aware (Python)
 
 ```
 Input conversation
-    → Retrieve top-10 related existing memories (for deduplication context)
-    → Single LLM call: extract all distinct new facts
+    → Retrieve top-10 related existing memories (for deduplication and conflict context)
+    → Single LLM call: choose ADD, UPDATE, DELETE, or NONE per fact
     → Batch embed extracted memories
     → Hash-based deduplication (MD5, prevents exact duplicates)
-    → Batch insert into vector store
+    → Update/delete superseded mutable facts; batch-insert new facts
     → Entity extraction (for entity matching)
 ```
 
-The previous algorithm used two LLM calls: one to extract candidate facts, one to decide ADD/UPDATE/DELETE actions against existing memories. The new algorithm collapses this into a single call that only adds. The model spends its capacity on understanding the input rather than diffing against existing state.
+The previous algorithm used two LLM calls: one to extract candidate facts and one to decide actions. The Python pipeline now performs both tasks in one call. It updates mutable current-state facts in place, deletes explicit retractions, and preserves independent events as additions. The TypeScript OSS pipeline remains ADD-only.
 
 ### Retrieval: Multi-Signal Hybrid Search
 

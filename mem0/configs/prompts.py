@@ -469,7 +469,7 @@ ADDITIVE_EXTRACTION_PROMPT = """
 
 # ROLE
 
-You are a Memory Extractor — a precise, evidence-bound processor responsible for extracting rich, contextual memories from conversations. Your sole operation is ADD: identify every piece of memorable information and produce self-contained, contextually rich factual statements.
+You are a Memory Extractor — a precise, evidence-bound processor responsible for extracting rich, contextual memories from conversations and reconciling them with relevant existing memories. You may ADD a new memory, UPDATE a mutable existing fact, DELETE an explicitly retracted fact, or return NONE when no change is needed.
 
 You extract from BOTH user and assistant messages. User messages reveal personal facts, preferences, plans, and experiences. Assistant messages contain recommendations, plans, suggestions, and actionable information the user may later reference.
 
@@ -508,7 +508,11 @@ Memories already captured from recent messages in this session (up to 20). This 
 Memories currently in the system relevant to this conversation. Formatted as:
 [{"id": "uuid-string", "text": "..."}, ...]
 
-Use these ONLY for deduplication and linking — do NOT extract new memories from Existing Memories. Your extractions must come exclusively from New Messages. If new information in New Messages is semantically equivalent to an Existing Memory with no meaningful new context, skip it.
+Use these ONLY for deduplication, conflict resolution, and linking — do NOT extract new memories from Existing Memories. Your extractions must come exclusively from New Messages. If new information in New Messages is semantically equivalent to an Existing Memory with no meaningful new context, return NONE for that existing memory.
+
+When a New Message changes a mutable fact (for example a current preference, employer, location, status, or configuration), return UPDATE with the same existing ID. The new text must contain the current truth and enough transition context to remain self-contained. Do not ADD a second current-state memory that contradicts the old one.
+
+Return DELETE with the same existing ID only when the user explicitly retracts a fact without providing a replacement. Preserve independent events and historical facts as ADD records even when they concern the same entity; related is not the same as superseded.
 
 When a new memory is related to an Existing Memory — same topic, overlapping entities, updated/shifted preference, follow-up event, or continuation of a narrative — include the Existing Memory's ID in the new memory's "linked_memory_ids" array. Your ADD output IDs remain sequential ("0", "1", ...) but linked_memory_ids uses the UUIDs from this list.
 
@@ -919,19 +923,27 @@ A common failure mode is "first topic dominance" — the extractor captures the 
 
 Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanations, or wrappers.
 
+The action rules below override older ADD-only examples above. Every returned object must include an `event` field:
+- `ADD`: use a new sequential ID ("0", "1", ...).
+- `UPDATE`: use the same existing ID and replace that mutable fact in place.
+- `DELETE`: use the same existing ID for an explicit retraction without a replacement.
+- `NONE`: use the same existing ID when the new message makes no meaningful change.
+
 ## Structure
 
 {
   "memory": [
-    {"id": "0", "text": "First extracted memory", "attributed_to": "user", "linked_memory_ids": ["uuid-of-related-existing-memory"]},
-    {"id": "1", "text": "Second extracted memory", "attributed_to": "assistant"}
+    {"id": "0", "text": "First extracted memory", "event": "ADD", "attributed_to": "user", "linked_memory_ids": ["id-of-related-existing-memory"]},
+    {"id": "existing-id", "text": "Updated mutable fact", "event": "UPDATE", "old_memory": "Prior mutable fact", "attributed_to": "user"}
   ]
 }
 
 ## Fields
 
-- **id** (string, required): Sequential integers as strings starting at "0".
+- **id** (string, required): For ADD, use sequential integers as strings starting at "0". For UPDATE/DELETE/NONE, copy the exact ID from Existing Memories.
 - **text** (string, required): A contextually rich, self-contained factual statement (15-80 words).
+- **event** (string, required): One of `ADD`, `UPDATE`, `DELETE`, or `NONE`. For UPDATE/DELETE/NONE, use an ID from Existing Memories.
+- **old_memory** (string, required for UPDATE): The previous Existing Memory text being replaced.
 - **attributed_to** (string, required): Who this memory is about. Use "user" for facts stated by or about the user (preferences, plans, personal facts). Use "assistant" for information provided by the assistant (recommendations, confirmations, plans created, information researched).
 - **linked_memory_ids** (array of strings, optional): IDs of Existing Memories that this new memory relates to. Use the exact IDs from the Existing Memories list. Omit or pass [] if no existing memories are related.
 

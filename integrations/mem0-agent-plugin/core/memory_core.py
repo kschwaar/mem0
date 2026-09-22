@@ -2574,12 +2574,27 @@ def forget_remote_repo(
 
 
 def _doctor_mem0_authentication(repo: RepoContext) -> dict[str, Any]:
-    """Verify the configured key with one read-only, repository-scoped search."""
+    """Verify the configured key independently of search/filter compatibility."""
+    key = api_key()
+    if not key:
+        return {"ok": False, "detail": "API key missing"}
+    url = api_base_url()
+    started = time.perf_counter()
+    try:
+        _get_json(f"{url}/v1/ping/", key, 5)
+    except Exception as exc:
+        return {"ok": False, "detail": bounded(str(exc), 300)}
+    elapsed = (time.perf_counter() - started) * 1000
+    return {"ok": True, "detail": f"connected ({elapsed:.0f} ms)"}
+
+
+def _doctor_mem0_search(repo: RepoContext) -> dict[str, Any]:
+    """Verify that the selected endpoint accepts the plugin's real nested filter shape."""
     key = api_key()
     if not key:
         return {"ok": False, "detail": "API key missing"}
     payload = {
-        "query": "Mem0 authentication check",
+        "query": "Mem0 search compatibility check",
         "filters": {
             "AND": [
                 {"user_id": user_id()},
@@ -2617,6 +2632,7 @@ def doctor(cwd: str | None = None) -> dict[str, Any]:
     repo = resolve_repo(cwd)
     directory = data_dir()
     directory.mkdir(parents=True, exist_ok=True)
+    authentication = _doctor_mem0_authentication(repo)
     checks: dict[str, dict[str, Any]] = {
         "python": {
             "ok": tuple(sys.version_info[:2]) >= (3, 10),
@@ -2630,12 +2646,16 @@ def doctor(cwd: str | None = None) -> dict[str, Any]:
             "ok": bool(api_key()),
             "detail": "configured" if api_key() else "missing",
         },
+        "mem0_endpoint": {"ok": True, "detail": api_base_url()},
         "repository": {
             "ok": bool(repo.identity),
             "detail": repo.identity,
         },
         "user_id": _doctor_user_id(),
-        "mem0_authentication": _doctor_mem0_authentication(repo),
+        "mem0_authentication": authentication,
+        "mem0_search": _doctor_mem0_search(repo)
+        if authentication["ok"]
+        else {"ok": False, "detail": "skipped because authentication failed"},
     }
     return {
         "ok": all(bool(value["ok"]) for value in checks.values()),

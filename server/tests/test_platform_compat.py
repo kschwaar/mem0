@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -45,11 +46,11 @@ class FakeMemory:
         return {"message": "All relevant memories deleted"}
 
 
-def make_client(monkeypatch):
+def make_client(monkeypatch, memory=None):
     from auth import verify_auth
     from routers import platform_compat
 
-    fake = FakeMemory()
+    fake = memory or FakeMemory()
     app = FastAPI()
     monkeypatch.setattr(platform_compat, "mcp", None)
     monkeypatch.setattr(platform_compat, "StreamableHTTPServerTransport", None)
@@ -100,6 +101,41 @@ def test_v3_search_preserves_app_id_filter(monkeypatch):
 
     assert response.status_code == 200
     assert fake.search_calls[0]["filters"] == {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]}
+
+
+def test_v3_search_plugin_filter_reaches_real_memory_search(monkeypatch):
+    """Consumer/provider contract for the nested filter emitted by coding-agent plugins."""
+    from mem0.memory.main import Memory
+
+    memory = object.__new__(Memory)
+    memory.api_version = "v1.1"
+    memory.reranker = None
+    memory._search_vector_store = MagicMock(return_value=[])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *args, **kwargs: None)
+    client, _ = make_client(monkeypatch, memory)
+
+    response = client.post(
+        "/v3/memories/search/",
+        json={
+            "query": "local",
+            "filters": {
+                "OR": [
+                    {"AND": [{"agent_id": "proj"}, {"app_id": "proj"}]},
+                    {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]},
+                ]
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    memory._search_vector_store.assert_called_once()
+    assert memory._search_vector_store.call_args.args[1] == {
+        "$or": [
+            {"AND": [{"agent_id": "proj"}, {"app_id": "proj"}]},
+            {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]},
+        ]
+    }
 
 
 def test_v1_aliases_get_update_delete(monkeypatch):

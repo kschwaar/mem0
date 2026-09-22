@@ -172,14 +172,28 @@ Breaking update. Memories carry over, most local config does not.
 - **MCP server replaced.** Nine read/write tools replaced by the single read-only `search_memories` tool.
 - **`~/.mem0/settings.json` ignored.** All keys stop applying: `auto_save`, `auto_search`, `search_limit`, `confidence_threshold`, `retention_session_days`, `global_search`, `debug`.
 - **Per-project `mem0.md` files ignored.**
-- **Most `MEM0_*` env vars ignored.** Only `MEM0_API_KEY`, `MEM0_USER_ID`, `MEM0_RESOLVED_USER_ID`, and `MEM0_PROJECT_ID` are still read. Run `/mem0:status` to see what is active.
+- **Most `MEM0_*` env vars ignored.** The endpoint overrides `MEM0_API_URL` and `MEM0_BASE_URL` are supported in addition to `MEM0_API_KEY`, `MEM0_USER_ID`, `MEM0_RESOLVED_USER_ID`, and `MEM0_PROJECT_ID`. Run `/mem0:status` to see the selected endpoint and what is active.
+
+## Using the self-hosted localhost server
+
+The plugin defaults to `https://api.mem0.ai`. Point it at the local compatibility API explicitly before starting Claude Code:
+
+```bash
+export MEM0_API_URL="http://localhost:8888"
+export MEM0_API_KEY="<local-api-key>"
+claude
+```
+
+`MEM0_BASE_URL` is accepted as a lower-precedence alias for `MEM0_API_URL`. Run `/mem0:status` and verify that `mem0_endpoint` is `http://localhost:8888`, `mem0_authentication` passes the read-only ping, and `mem0_search` passes the nested-filter compatibility probe.
 
 ## Troubleshooting
 
 | Problem | Fix |
 | --- | --- |
 | Missing key | Reinstall with `--config api_key="$MEM0_API_KEY"` while the var is set. |
-| `401 Unauthorized` | API key is invalid or expired. Run `/mem0:status`. |
+| `401 Unauthorized` | Check `mem0_endpoint` first, then use a key issued by that exact hosted or self-hosted instance. |
+| `404 Not Found` while flushing | The selected endpoint does not expose the platform-compatibility routes, or the plugin is pointed at the wrong server. Check `mem0_endpoint` and `/v1/ping/`. |
+| Search returns `400 Bad Request` | Check the separate `mem0_search` status result; authentication may still be valid. |
 | No memory after ending a session | Extraction runs in the background. Wait a moment, then search again. |
 | Sidekick won't start | Must be in a Git repo with a Claude Code version supporting plugin agents and worktrees. |
 | Remove the plugin | `claude plugin uninstall mem0@mem0-plugins` |

@@ -741,17 +741,20 @@ def test_doctor_verifies_remote_mem0_search(isolated_env, monkeypatch):
 
     with (
         patch.object(memory_core, "resolve_repo", return_value=repo()),
-        patch.object(
-            memory_core,
-            "_request_json",
-            return_value=({"results": []}, 100, 20),
-        ) as request,
+        patch.object(memory_core, "_get_json", return_value=({"status": "ok"}, 20)) as ping,
+        patch.object(memory_core, "_request_json", return_value=({"results": []}, 100, 20)) as request,
     ):
         result = memory_core.doctor("/tmp/repo")
 
     assert result["ok"] is True
     assert result["checks"]["mem0_authentication"]["ok"] is True
+    assert result["checks"]["mem0_search"]["ok"] is True
+    assert result["checks"]["mem0_endpoint"] == {
+        "ok": True,
+        "detail": memory_core.DEFAULT_API_URL,
+    }
     assert "connected" in result["checks"]["mem0_authentication"]["detail"]
+    assert ping.call_args.args[0] == memory_core.DEFAULT_API_URL + "/v1/ping/"
     payload = request.call_args.args[2]
     assert payload["filters"] == {
         "AND": [{"user_id": "test-user"}, {"app_id": "code-example"}]
@@ -764,11 +767,8 @@ def test_doctor_rejects_invalid_remote_key(isolated_env, monkeypatch):
 
     with (
         patch.object(memory_core, "resolve_repo", return_value=repo()),
-        patch.object(
-            memory_core,
-            "_request_json",
-            side_effect=RuntimeError("HTTP Error 401: Unauthorized"),
-        ),
+        patch.object(memory_core, "_get_json", side_effect=RuntimeError("HTTP Error 401: Unauthorized")),
+        patch.object(memory_core, "_request_json") as search,
     ):
         result = memory_core.doctor("/tmp/repo")
 
@@ -778,6 +778,30 @@ def test_doctor_rejects_invalid_remote_key(isolated_env, monkeypatch):
         "ok": False,
         "detail": "HTTP Error 401: Unauthorized",
     }
+    search.assert_not_called()
+
+
+def test_doctor_distinguishes_search_compatibility_from_authentication(isolated_env, monkeypatch):
+    monkeypatch.setenv("MEM0_API_KEY", "m0-test-key")
+    monkeypatch.setenv("MEM0_API_URL", "http://localhost:8888")
+
+    with (
+        patch.object(memory_core, "resolve_repo", return_value=repo()),
+        patch.object(memory_core, "_get_json", return_value=({"status": "ok"}, 20)),
+        patch.object(
+            memory_core,
+            "_request_json",
+            side_effect=RuntimeError("HTTP Error 400: Bad Request"),
+        ),
+    ):
+        result = memory_core.doctor("/tmp/repo")
+
+    assert result["checks"]["mem0_authentication"]["ok"] is True
+    assert result["checks"]["mem0_search"] == {
+        "ok": False,
+        "detail": "HTTP Error 400: Bad Request",
+    }
+    assert result["checks"]["mem0_endpoint"]["detail"] == "http://localhost:8888"
 
 
 def test_tool_capture_is_bounded_and_does_not_store_edited_code():

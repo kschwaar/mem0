@@ -72,6 +72,8 @@ export MEM0_API_KEY="m0-disposable-test-key"
 
 Do not put a real key in source files, command history shared with others, or pull-request configuration.
 
+The Python runtime defaults to `https://api.mem0.ai`. Self-hosted installations must set `MEM0_API_URL` (or the lower-precedence `MEM0_BASE_URL` alias) explicitly. Doctor output reports the resolved `mem0_endpoint` and checks authentication separately from nested-filter search compatibility.
+
 ## Add a plugin
 
 For another native Python host:
