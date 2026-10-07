@@ -1,0 +1,30 @@
+{
+  "llm": {
+    "provider": "ollama",
+    "config": {
+      "model": "REPLACE_WITH_EXACT_INSTALLED_QWEN_TAG",
+      "baseURL": "http://127.0.0.1:11434"
+    }
+  },
+  "embedder": {
+    "provider": "ollama",
+    "config": {
+      "model": "REPLACE_WITH_EXACT_INSTALLED_EMBEDDING_TAG",
+      "baseURL": "http://127.0.0.1:11434",
+      "embeddingDims": 768
+    }
+  },
+  "reranker": {
+    "provider": "llm_reranker",
+    "config": {
+      "topK": 2,
+      "llm": {
+        "provider": "ollama",
+        "config": {
+          "model": "REPLACE_WITH_EXACT_INSTALLED_QWEN_TAG",
+          "baseURL": "http://127.0.0.1:11434"
+        }
+      }
+    }
+  }
+}
