@@ -99,4 +99,33 @@ m = Memory.from_config(config)
 
 ## Config
 
+For the Python `openai` provider, OpenAI-compatible local servers can use explicit
+backend fields and bounded client behavior:
+
+```python
+llm_config = {
+    "provider": "openai",
+    "config": {
+        "model": "gemma-4-12B-it-4bit",
+        "openai_base_url": "http://127.0.0.1:8080/v1",
+        "temperature": 0,
+        "max_tokens": 256,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+        "request_timeout": 30,
+        "max_retries": 0,
+    },
+}
+```
+
+`extra_body` is opt-in and passed to the OpenAI SDK; its fields must be supported
+by your backend. A per-call `extra_body` replaces the configured dictionary.
+Avoid conflicting standard fields such as `model` or `messages` in this dictionary.
+`request_timeout` is a positive finite timeout in seconds, not a whole-experiment
+deadline or proof of server cancellation. `max_retries` is a nonnegative integer;
+zero disables SDK retries. Omitting these options preserves SDK defaults.
+Use the server's key through `OPENAI_API_KEY`; do not save keys in configuration
+files. Unset `OPENROUTER_API_KEY` when testing a local endpoint because it selects
+the OpenRouter route. These options do not configure embeddings, other provider
+clients, or the TypeScript SDK.
+
 All available parameters for the `openai` config are present in [Master List of All Params in Config](../config).

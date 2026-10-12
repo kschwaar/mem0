@@ -39,18 +39,25 @@ class OpenAILLM(LLMBase):
         if not self.config.model:
             self.config.model = "gpt-5-mini"
 
+        client_options = {}
+        if self.config.request_timeout is not None:
+            client_options["timeout"] = self.config.request_timeout
+        if self.config.max_retries is not None:
+            client_options["max_retries"] = self.config.max_retries
+
         if os.environ.get("OPENROUTER_API_KEY"):  # Use OpenRouter
             self.client = OpenAI(
                 api_key=os.environ.get("OPENROUTER_API_KEY"),
                 base_url=self.config.openrouter_base_url
                 or os.getenv("OPENROUTER_API_BASE")
                 or "https://openrouter.ai/api/v1",
+                **client_options,
             )
         else:
             api_key = self.config.api_key or os.getenv("OPENAI_API_KEY")
             base_url = self.config.openai_base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
 
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
+            self.client = OpenAI(api_key=api_key, base_url=base_url, **client_options)
 
     def _parse_response(self, response, tools):
         """
@@ -104,6 +111,8 @@ class OpenAILLM(LLMBase):
             json: The generated response.
         """
         params = self._get_supported_params(messages=messages, **kwargs)
+        if self.config.extra_body is not None and "extra_body" not in params:
+            params["extra_body"] = self.config.extra_body
         
         params.update({
             "model": self.config.model,

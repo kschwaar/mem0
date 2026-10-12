@@ -17,6 +17,56 @@ def mock_openai_client():
         yield mock_client
 
 
+def test_local_runtime_controls_are_configurable(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with patch("mem0.llms.openai.OpenAI") as constructor:
+        client = constructor.return_value
+        client.chat.completions.create.return_value.choices = [Mock(message=Mock(content='{"facts": []}'))]
+        llm = OpenAILLM(
+            {
+                "model": "gemma-4-12B-it-4bit",
+                "api_key": "test-key",
+                "openai_base_url": "http://127.0.0.1:8080/v1",
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                "request_timeout": 30,
+                "max_retries": 0,
+            }
+        )
+        constructor.assert_called_once_with(
+            api_key="test-key", base_url="http://127.0.0.1:8080/v1", timeout=30, max_retries=0
+        )
+        llm.generate_response([{"role": "user", "content": "Hello"}], response_format={"type": "json_object"})
+        params = client.chat.completions.create.call_args.kwargs
+        assert params["model"] == "gemma-4-12B-it-4bit"
+        assert params["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+        assert params["response_format"] == {"type": "json_object"}
+
+
+def test_per_call_extra_body_replaces_configured_defaults(mock_openai_client):
+    config = OpenAIConfig(model="local", extra_body={"chat_template_kwargs": {"enable_thinking": False}})
+    mock_openai_client.chat.completions.create.return_value.choices = [Mock(message=Mock(content="ok"))]
+    llm = OpenAILLM(config)
+    llm.generate_response([{"role": "user", "content": "Hello"}], extra_body={"custom_field": 1})
+    assert mock_openai_client.chat.completions.create.call_args.kwargs["extra_body"] == {"custom_field": 1}
+    assert config.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def test_factory_preserves_runtime_controls_from_config_object(mock_openai_client):
+    from mem0.utils.factory import LlmFactory
+
+    config = OpenAIConfig(model="local", extra_body={"enable_thinking": False}, request_timeout=30, max_retries=0)
+    llm = LlmFactory.create("openai", config)
+    assert llm.config.extra_body == {"enable_thinking": False}
+    assert llm.config.request_timeout == 30
+    assert llm.config.max_retries == 0
+
+
+@pytest.mark.parametrize("options", [{"request_timeout": 0}, {"max_retries": -1}, {"extra_body": []}])
+def test_invalid_runtime_controls_rejected(options):
+    with pytest.raises(ValueError):
+        OpenAIConfig(**options)
+
+
 def test_openai_llm_base_url():
     # case1: default config: with openai official base url
     config = OpenAIConfig(model="gpt-4.1-nano-2025-04-14", temperature=0.7, max_tokens=100, top_p=1.0, api_key="api_key")

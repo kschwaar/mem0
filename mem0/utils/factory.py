@@ -90,6 +90,9 @@ class LlmFactory:
             # Merge dict config with kwargs
             config = {**config, **kwargs}
             config = config_class(**config)
+        elif isinstance(config, config_class) and not kwargs:
+            # Preserve provider-specific options on an already constructed config.
+            pass
         elif isinstance(config, BaseLlmConfig):
             # Convert base config to provider-specific config if needed
             if config_class != BaseLlmConfig:
