@@ -188,7 +188,12 @@ notebooks/*.yaml
 # cache db
 *.db
 
+# Local CodeGraph index and generated state.
+/.codegraph/
+
 # local directories for testing
+# Reusable local benchmark datasets and run artifacts (not temporary).
+/artifacts/evaluation/
 eval/
 qdrant_storage/
 .crossnote

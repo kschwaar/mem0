@@ -1,0 +1,26 @@
+{
+  "llm": {
+    "provider": "openai",
+    "config": {
+      "model": "gemma-4-12B-it-4bit",
+      "openai_base_url": "http://127.0.0.1:8080/v1",
+      "temperature": 0,
+      "top_p": 1,
+      "max_tokens": 256,
+      "extra_body": {"chat_template_kwargs": {"enable_thinking": false}},
+      "request_timeout": 30,
+      "max_retries": 0
+    }
+  },
+  "embedder": {
+    "provider": "openai",
+    "config": {
+      "model": "Qwen3-Embedding-0.6B-4bit-DWQ",
+      "openai_base_url": "http://127.0.0.1:8080/v1"
+    }
+  },
+  "vector_store": {
+    "provider": "qdrant",
+    "config": {"embedding_model_dims": 1024}
+  }
+}

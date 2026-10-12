@@ -1,9 +1,45 @@
 # AI evaluation workbench
 
+The [active goal](active-goal.md) records the current evidence and next work:
+verify whether localhost Mem0 with oMLX is useful for coding-agent repository
+facts, decisions and prior work. The 2026-10-07 [handoff checkpoint](CHECKPOINT-2026-10-07.md)
+is historical; its paused status does not describe the resumed evaluation.
+
+Two complete isolated LongMemEval histories have run through the authenticated
+product API. One knowledge-update case passed reviewed retrieval and answer
+checks. The multi-session case failed retrieval; its answerer appropriately
+abstained, while the automated judge incorrectly reported PASS. Broad usefulness
+remains unproven. Current work is diagnosis and judge calibration, before wider
+benchmark ingestion. Generated datasets, credentials and run evidence live under
+ignored `artifacts/evaluation/`; they are not portable source dependencies.
+
+Start with the [central benchmark integration plan](benchmark-integration.md)
+for localhost deployment options, dataset bootstrapping and completion gates.
+The [collaboration board](collaboration.md) tracks scoped goals and dependencies.
+For this machine, use the [oMLX readiness report](omlx-readiness.md),
+[Gemma diagnostic config](gemma-omlx-python.json), and
+[first stateful result](gemma-trajectory-first.md). Gemma is an experimental
+candidate, not an accepted service default; the original 27B config is historical.
+
 This workbench tests the actual downstream checkout. Start with the TypeScript
 SDK, then use the Python companion for its distinct contracts and stateful smoke
-tests. No live model measurements have been made during setup. Offline results
-verify the runner and fixtures; they do not establish Qwen quality or speed.
+tests. Setup-only results were offline. Subsequent direct model diagnostics and
+one real Python SDK trajectory are recorded below; they do not establish broad
+quality, TypeScript equivalence, normal-workload capacity, or service acceptance.
+
+## Current evidence and next gate
+
+See [the active goal](active-goal.md) for completed runs and reviewed failures.
+The early direct-model and tiny SDK findings in
+[the bounded trajectory report](gemma-trajectory-first.md) remain diagnostics,
+not population accuracy or latency estimates. The coding diagnostic retained
+all required facts, but top-10 returned all ten stored memories, so it did not
+establish selective retrieval at realistic store sizes.
+
+Next: repair and review a two-source-chunk isolated replay to distinguish
+extraction omission from later retention loss, and calibrate the judge with
+known correct, incorrect and abstention controls. No service/model defaults or
+personal memory stores should change as part of this workbench.
 
 ## What the repository calls
 
@@ -138,6 +174,43 @@ locally; raw outputs require `--retain-outputs`. Phrase checks and a short
 trajectory do not establish long-term effectiveness or simulated aging.
 TypeScript end-to-end trajectories, graph/vision/procedural cases and hosted
 service internal traces remain additional coverage work.
+
+### Whole-run watchdog for small localhost trajectories
+
+Use [the bounded launcher](../run_bounded_trajectory.py) for subsequent small
+live trajectories after resource/model readiness is verified:
+
+```bash
+python3 scripts/run_bounded_trajectory.py \
+  --config scripts/evaluation/gemma-omlx-python.json \
+  --output /tmp/mem0-gemma-bounded-unique \
+  --wall-seconds 300 --max-events 9 --max-adds 3
+```
+
+The existing server key must already be mapped to `OPENAI_API_KEY` in the process
+environment and `OPENROUTER_API_KEY` absent. Never put keys in the command or JSON.
+The launcher runs this checkout's isolated trajectory once, without warmups or
+whole-run retries. It rejects existing output/control/reconciliation artifacts
+before inference. An external watchdog terminates the child evaluation process
+when its whole-run wall budget expires; termination/reaping can add up to six
+seconds beyond that budget. `<output>.control.json` records process outcome and
+`<output>.reconciliation.json` lists observed versus missing event IDs. An
+interrupted run cannot pass even if a child summary exists. Missing outcomes
+remain missing, not successful checkpoints.
+
+Stopping the client **does not prove cancellation of an in-flight backend
+request**. Before any follow-on run, inspect oMLX's active/loading/waiting state
+and resource pressure; never automatically retry incomplete ingestion. The
+watchdog does not measure resources, cap hidden provider fan-out, or establish
+desktop coexistence. SDK timeout/retry fields are separate settings; this
+configuration controls generation, not embedding SDK retries.
+
+By default the child requests offline Hugging Face/Transformers asset resolution
+to avoid the previous incidental BM25 asset fetch. This is not a universal
+network sandbox or proof of lexical/BM25 coverage: pre-cache and inventory the
+required assets and check fallback behavior. `--allow-hf-downloads` is an explicit
+opt-in, not a readiness default. Larger envelopes require a deliberate resource
+review; default bounds remain three adds/nine operations/five minutes.
 
 ## Long-term effectiveness and official benchmarks
 
