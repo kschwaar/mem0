@@ -1,11 +1,20 @@
 import asyncio
+import json
 import logging
+import math
 import os
 import time
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import telemetry
 from auth import ADMIN_API_KEY, AUTH_DISABLED, JWT_SECRET, require_admin, verify_auth
+from compat import (
+    RESERVED_PAYLOAD_KEYS,
+    add_app_id_to_metadata,
+    iter_rows_from_vector_store,
+    serialize_memory,
+)
 from db import SessionLocal
 from dotenv import load_dotenv
 from errors import (
@@ -19,28 +28,30 @@ from errors import (
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from compat import RESERVED_PAYLOAD_KEYS, add_app_id_to_metadata, iter_rows_from_vector_store, serialize_memory
-from mem0.exceptions import ValidationError as Mem0ValidationError
 from models import RequestLog, User
 from pydantic import BaseModel, Field
 from rate_limit import limiter
+from relationship_graph_config import build_relationship_graph_config
 from routers import api_keys as api_keys_router
 from routers import auth as auth_router
 from routers import entities as entities_router
 from routers import platform_compat as platform_compat_router
 from routers import requests as requests_router
+from runtime_tracing import build_exporter, http_status, request_span, shutdown_exporter
 from schemas import MessageResponse
 from server_state import (
     get_current_config,
     get_memory_instance,
     initialize_state,
+    set_runtime_tracer,
     set_session_factory,
     update_config,
 )
-from relationship_graph_config import build_relationship_graph_config
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import func, select
+
+from mem0.exceptions import ValidationError as Mem0ValidationError
 
 load_dotenv()
 
@@ -153,6 +164,26 @@ def _openai_provider_config() -> dict[str, Any]:
     config = {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL}
     if OPENAI_BASE_URL:
         config["openai_base_url"] = OPENAI_BASE_URL
+    for environment, field in (("MEM0_LLM_MAX_TOKENS", "max_tokens"), ("MEM0_LLM_MAX_RETRIES", "max_retries")):
+        value = os.environ.get(environment)
+        if value is not None:
+            config[field] = int(value)
+            if config[field] < (1 if field == "max_tokens" else 0):
+                raise ValueError(f"Invalid {environment}")
+    for environment, field in (("MEM0_LLM_TEMPERATURE", "temperature"), ("MEM0_LLM_TOP_P", "top_p"),
+                               ("MEM0_LLM_REQUEST_TIMEOUT", "request_timeout")):
+        value = os.environ.get(environment)
+        if value is not None:
+            config[field] = float(value)
+            if (not math.isfinite(config[field]) or config[field] < 0
+                    or (field in {"top_p", "request_timeout"} and config[field] == 0)
+                    or (field == "top_p" and config[field] > 1)):
+                raise ValueError(f"Invalid {environment}")
+    extra = os.environ.get("MEM0_LLM_EXTRA_BODY_JSON")
+    if extra is not None:
+        config["extra_body"] = json.loads(extra)
+        if not isinstance(config["extra_body"], dict):
+            raise ValueError("MEM0_LLM_EXTRA_BODY_JSON must be an object")
     return config
 
 
@@ -191,11 +222,27 @@ if relationship_graph_config is not None:
     DEFAULT_CONFIG["relationship_graph"] = relationship_graph_config
 
 
-set_session_factory(SessionLocal)
-initialize_state(DEFAULT_CONFIG)
+_runtime_tracer, _runtime_trace_provider = build_exporter(os.environ) or (None, None)
+try:
+    if _runtime_tracer is not None:
+        set_runtime_tracer(_runtime_tracer, request_id_var.get)
+    set_session_factory(SessionLocal)
+    initialize_state(DEFAULT_CONFIG)
+except BaseException:
+    shutdown_exporter(_runtime_trace_provider)
+    raise
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(shutdown_exporter, _runtime_trace_provider)
 
 
 app = FastAPI(
+    lifespan=lifespan,
     title="Mem0 REST APIs",
     description=(
         "A REST API for managing and searching memories for your AI Agents and Apps.\n\n"
@@ -352,26 +399,29 @@ async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     status_code = 500
 
-    try:
-        response = await call_next(request)
-        status_code = response.status_code
-        response.headers["X-Request-ID"] = rid
-        return response
-    except Exception:
-        status_code = 500
-        raise
-    finally:
-        request_id_var.reset(token)
-        if _should_log_request(request):
-            asyncio.get_running_loop().run_in_executor(
-                None,
-                _persist_request_log,
-                request.method,
-                request.url.path,
-                status_code,
-                round((time.perf_counter() - start) * 1000, 2),
-                getattr(request.state, "auth_type", "none"),
-            )
+    # Do not put a raw path/query into tracing; it can contain personal IDs.
+    with request_span(_runtime_tracer, rid, request.method, "unresolved") as span:
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers["X-Request-ID"] = rid
+            return response
+        except Exception:
+            status_code = 500
+            raise
+        finally:
+            http_status(span, status_code)
+            request_id_var.reset(token)
+            if _should_log_request(request):
+                asyncio.get_running_loop().run_in_executor(
+                    None,
+                    _persist_request_log,
+                    request.method,
+                    request.url.path,
+                    status_code,
+                    round((time.perf_counter() - start) * 1000, 2),
+                    getattr(request.state, "auth_type", "none"),
+                )
 
 
 @app.get("/configure", summary="Get current Mem0 configuration")
