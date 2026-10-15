@@ -12,6 +12,7 @@ import os
 import uuid
 from pathlib import Path
 
+from benchmark_compat import normalize_source_dates
 from benchmark_service_client import LocalServiceClient
 
 
@@ -194,7 +195,7 @@ class ProductBackend:
     async def search(self, query, user_id, top_k=200, rerank=None, score_debug=False):
         if rerank is not None or score_debug is not False:
             raise ValueError("Product search cannot express rerank or score-debug options")
-        result = await self._call("search", {"query": query, "user_id": user_id, "limit": top_k})
+        result = normalize_source_dates(await self._call("search", {"query": query, "user_id": user_id, "limit": top_k}))
         return result["results"]
 
     async def delete_user(self, user_id):

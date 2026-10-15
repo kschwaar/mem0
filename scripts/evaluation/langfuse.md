@@ -1,10 +1,102 @@
 # Langfuse evaluation tracing
 
-The TypeScript evaluator can export real OpenTelemetry spans directly to
-Langfuse and deliver grades separately through the Scores API. It keeps the
-existing scheduler and local ledger. The default `--trace-backend none` requires
-no Langfuse configuration. Python tracing, native Langfuse experiments and a
-collector are not implemented by this change.
+The TypeScript evaluator exports OpenTelemetry spans directly to local Langfuse
+and delivers grades separately through the Scores API, retaining its scheduler
+and local ledger. Its default `--trace-backend none` needs no Langfuse setup.
+The SDK/server/browser runtime instrumentation is separate, described below.
+Native Langfuse experiments are not implemented by these evaluation CLIs.
+
+## Runtime inference callsite inventory
+
+Runtime tracing is opt-in. Supply `MEM0_RUNTIME_TRACING=true` and local project
+keys privately to Python/Node processes. Browser examples use a loopback collector
+without project keys. The server and deployment guide is
+[`server/RUNTIME_TRACING.md`](../../server/RUNTIME_TRACING.md).
+Do not combine the evaluator's own `--trace-backend langfuse` with automatic SDK
+runtime export in the same standalone CLI; use `MEM0_RUNTIME_TRACING=false` there.
+
+| Owned location | AI/inference boundary and coverage |
+| --- | --- |
+| `mem0/llms/` | `LLMBase.generate_response` wraps all 18 concrete adapters: Anthropic, Bedrock, Azure OpenAI/structured, DeepSeek, Gemini, Groq, LangChain, LiteLLM, LM Studio, MiniMax, Ollama, OpenAI/structured, Sarvam, Together, vLLM, xAI. |
+| `mem0/embeddings/` | `EmbeddingBase.embed`/`embed_batch` cover Bedrock, Azure, FastEmbed, Google GenAI, Hugging Face, LangChain, LM Studio, Ollama, OpenAI, Together, Vertex. `MockEmbeddings` is synthetic, not evidence of a real model request. |
+| `mem0/reranker/` | `BaseReranker.rerank` covers Cohere, Hugging Face, LLM, SentenceTransformer and ZeroEntropy, including local `predict` inference. LLM reranking has a nested LLM generation. |
+| `mem0/graphs/extractors.py` | Structured graph extraction calls its supplied LLM; Mem0 wrappers are reused, and custom protocol implementations get an explicit generation boundary. |
+| `mem0/memory/utils.py` | `get_image_description` has a utility span; its LLM invocation has a generation span. |
+| `mem0/vector_stores/qdrant.py` | FastEmbed BM25 `_encode_bm25` is a local sparse-inference span. |
+| `mem0/vector_stores/vertex_ai_vector_search.py` | Internal `embed_query`/`embed_documents` calls are observed. Other stores accept vectors and are not model inference. |
+| `mem0/memory/main.py` | Sync/async memory operations use those boundaries; entity-search thread submissions propagate request context. Memory CRUD itself is not relabeled as inference. |
+| `mem0-ts/src/oss/src/llms/` | Direct constructors and factories cover all 18 adapters: Anthropic, Bedrock, Azure, DeepSeek, Google, Groq, LangChain, LiteLLM, LM Studio, MiniMax, Mistral, Ollama, OpenAI/structured, Sarvam, Together, vLLM, xAI. |
+| `mem0-ts/src/oss/src/embeddings/` | All 11 adapters: Bedrock, Azure, FastEmbed, Google, Hugging Face, LangChain, LM Studio, Ollama, OpenAI, Together, Vertex. |
+| `mem0-ts/src/oss/src/rerankers/` | Cohere, cross-encoder, LLM and ZeroEntropy; local inference is covered even without a recognizable raw SDK client. |
+| `mem0-ts/src/oss/src/utils/runtime_tracing.ts` | Recognized raw chat/Responses/embedding/messages/Google/Ollama/Mistral/rerank/Vertex/LangChain methods enrich active adapter spans; standalone clients can be explicitly instrumented. Returned provider streams finish on consumption/error/cancellation. |
+| `server/main.py` | Startup configures the SDK exporter; `mem0.http` roots associate model/embedding/sparse spans with the generated request ID. Shutdown owns flush. |
+| `integrations/vercel-ai-sdk/src/provider-response-provider.ts` | One native provider `doGenerate`/`doStream` observation; the generic Mem0 layer delegates without a second generation. Stream consumption/error/cancellation owns completion. Host application supplies OTEL export. |
+| `examples/notebooks/customer-support-chatbot.ipynb` | Anthropic `messages.create` in `SupportChatbot.handle_customer_query`. |
+| `examples/graph-db-demo/kuzu-example.ipynb` | OpenAI `chat.completions.create` in `chat_with_memories`. |
+| `examples/misc/movie_recommendation_grok3.py` | xAI via OpenAI-compatible chat completions. |
+| `examples/misc/voice_assistant_elevenlabs.py` | Whisper transcription; ElevenLabs speech generation plus full playback; CrewAI kickoff dispatch. |
+| `examples/misc/fitness_checker.py`, `personal_assistant_agno.py`, `diet_assistant_voice_cartesia.py` | Full Agno run/print-response operations, including image input and Cartesia tool dispatch, without exporting content. |
+| `examples/misc/personalized_search.py` | LangChain `AgentExecutor.invoke` logical run. |
+| `examples/misc/test.py`, `study_buddy.py` | OpenAI Agents `Runner.run_sync` / awaited `Runner.run`, including handoffs. |
+| `examples/misc/healthcare_assistant_google_adk.py` | ADK `Runner.run_async`, consumed through final events inside the boundary. |
+| `examples/multiagents/llamaindex_learning_system.py` | Awaited LlamaIndex `AgentWorkflow.run`. |
+| `examples/misc/strands_agent_aws_elasticache_neptune.py` | Strands agent invocation, with its complete logical operation observed; hidden Bedrock requests are not separately counted. |
+| `examples/notebooks/mem0-autogen.ipynb` | AutoGen `initiate_chat` conversations in code cells 2/5/8/11. |
+| `examples/multimodal-demo/src/hooks/useChat.ts`, `examples/multimodal-demo/useChat.ts` | Direct OpenAI multimodal stream creation and full iteration. Existing API settings expose explicit collector opt-in. |
+| `examples/yt-assistant-chrome/src/background.js` | Chat Completions REST fetch through consumed response stream. Model-list credential validation is not inference. Webpack's background bundle is the manifest service worker. |
+| `examples/openai-inbuilt-tools/index.js` | Explicitly instrumented raw OpenAI `responses.create`, including built-in/function tool dispatch. Uses this checkout's standalone tracing export. |
+| `examples/mem0-demo/app/api/chat/route.ts` | Raw AI SDK OpenAI model is explicitly wrapped at its `doStream` boundary before `streamText`. |
+| `examples/vercel-ai-sdk-chat-app/src/hooks/useChat.ts` | Browser AI SDK stream creation and text-stream consumption, exporting through the loopback collector. |
+| `scripts/evaluate_ai_calls.py`, `scripts/evaluate_memory_trajectory.py` | Real LLM/embedder/reranker adapter calls use SDK instrumentation; offline/mock results are not proof of model inference. |
+| `mem0-ts/scripts/evaluate_ai_calls.ts` | Its evaluation-local exporter captures SDK calls and grades; use that tracing backend rather than also enabling automatic runtime export. |
+| Frozen `artifacts/evaluation/**` benchmark/scoring sources | Raw OpenAI/Anthropic answerer/judge clients require the opt-in `scripts/trace_python.py` launcher. Archived sources/fingerprints remain unchanged. |
+
+### Non-owned and non-inference boundaries
+
+Hosted `MemoryClient`/CLI operations and editor/agent plugins call Mem0 HTTP APIs
+or host-supplied runtimes. Their remote model internals cannot be instrumented
+from a client checkout. Local OSS CLI/plugin calls inherit SDK/service coverage.
+Graph/vector database operations, supplied-vector storage, model lists, credential
+checks, local file/audio writes and mocked tests are not independent AI calls.
+The graph demonstration notebooks other than Kuzu use the shared Mem0 providers.
+
+Framework spans identify complete logical dispatches, not one physical request:
+tools, handoffs and private retries may contain additional work. Explicit Python
+setup instruments supported raw OpenAI, Anthropic and Google GenAI methods too;
+unrecognized host/vendor methods remain opaque inside the dispatch. Arbitrary
+custom adapters need an explicit `trace_call` or `withRuntimeSpan` boundary.
+Subprocesses need their own tracing setup. `scripts/trace_python.py` propagates an
+opt-in startup hook through inherited `PYTHONPATH`, preserving existing startup
+hooks; children that replace their environment or use an interpreter without
+this checkout's tracing dependencies require explicit setup.
+
+### Real local readback
+
+The local audit authenticated project `local-project` on Langfuse 4.53.0 and queried
+the actual generation/embedding observations after HTTP, raw async Python, Python
+stream, built Node, Vercel stream and browser-to-collector inference. Trace IDs and
+deployment settings are recorded in the server guide. Sanitized evidence is under
+ignored `artifacts/evaluation/otel-audit-20261012/`.
+
+For independent readback, set an ISO-8601 time window and the observed trace ID;
+keys must already be privately supplied:
+
+```bash
+curl --fail --silent --show-error \
+  --user "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  --get http://localhost:4000/api/public/v2/observations \
+  --data-urlencode "fromStartTime=$FROM_START_TIME" \
+  --data-urlencode "toStartTime=$TO_START_TIME" \
+  --data-urlencode 'limit=100' \
+  --data-urlencode 'fields=core,basic,metadata,usage' \
+  | jq --arg trace "$TRACE_ID" '.data[] | select(.traceId == $trace)'
+```
+
+Check parent IDs and observation types, not just an HTTP export acknowledgement.
+Reported usage must come from the provider; missing usage is unknown.
+Custom local models can have no Langfuse pricing/model ID while the model-name
+metadata and available usage are present. Remote vendor/framework runs and a
+loaded Chrome extension were not established by the local inference smoke.
 
 ## Local readiness and credentials
 
@@ -129,10 +221,11 @@ and [OpenAPI schema](https://api.reference.langfuse.com/).
 ## Fake receiver checks
 
 Run the focused evaluator, tracing, score and integration tests using pnpm.
-The integration test uses actual OTLP HTTP JSON export and native Scores API
-fetch against an ephemeral loopback receiver with fake credentials. Its isolated
-Jest configuration avoids the package's dotenv setup entirely. The Node VM
-option supports the OTel exporter's dynamic HTTP import inside Jest:
+The package's `pnpm test` launcher supplies the Node VM option required by
+the OTel exporter's dynamic HTTP import inside Jest. The integration test uses
+actual OTLP HTTP JSON export and native Scores API fetch against an ephemeral
+loopback receiver with fake credentials. For an isolated run that avoids the
+package's dotenv setup entirely:
 
 ```bash
 NODE_OPTIONS=--experimental-vm-modules corepack pnpm exec jest --runInBand \

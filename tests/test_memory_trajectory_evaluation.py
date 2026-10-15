@@ -143,3 +143,26 @@ def test_no_assertions_is_explicit_operational_smoke(tmp_path):
     )
     assert result["passed"] and result["quality_passed"] is None
     assert result["assessment"] == "operation_smoke_only"
+
+def test_malformed_memory_envelope_is_ungradable_and_stops_trajectory(tmp_path):
+    class Memory:
+        def __init__(self, config):
+            pass
+
+        def get_all(self, filters, top_k):
+            return {"error": "broken adapter"}
+
+        def close(self):
+            pass
+
+    events = [
+        {"id": "corrupt", "action": "get_all", "user": "alice", "expect": {"empty": True}},
+        {"id": "must-not-run", "action": "get_all", "user": "alice", "expect": {"empty": True}},
+    ]
+    result = trajectory.run(events, {}, tmp_path / "run", memory_factory=Memory)
+    assert result["passed"] is False and result["quality_passed"] is None
+    assert result["ungradable_outputs"] == 1
+    assert result["checks_passed"] == result["checks_total"] == 0
+    outcomes = [json.loads(line) for line in (tmp_path / "run" / "outcomes.jsonl").read_text().splitlines()]
+    assert [row["stage_id"] for row in outcomes] == ["corrupt"]
+    assert outcomes[0]["status"] == "ungradable_output"

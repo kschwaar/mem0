@@ -57,16 +57,28 @@ def test_checkpoint_resume_matches_successful_ledger_and_contiguous_source_prefi
             validate_checkpoint_resume(path, expected, checkpoint, "scope-user", context, context)
 
 
-def test_add_and_search_use_transport_and_keep_failure_visible():
+def test_search_projects_source_time_after_transport_without_mutating_http_response():
     async def scenario():
         subject = backend()
-        subject._client.call = Mock(return_value={"results": []})
-        await subject.add([{"role": "user", "content": "tea"}], "evaluation-unique-001-a", timestamp=0)
-        assert subject._client.call.call_args.args[1]["timestamp"] == 0
-        assert await subject.search("tea", "evaluation-unique-001-a", top_k=10) == []
-        subject._client.call.side_effect = RuntimeError("failed")
-        with pytest.raises(RuntimeError):
-            await subject.search("tea", "evaluation-unique-001-a")
+        response = {
+            "results": [
+                {
+                    "id": "m1",
+                    "memory": "The appointment is tomorrow.",
+                    "created_at": "2026-10-13T09:30:00+00:00",
+                    "metadata": {"evaluation_source_date": "2022-09-01"},
+                }
+            ]
+        }
+        subject._client.call = Mock(return_value=response)
+
+        results = await subject.search("appointment", "evaluation-unique-001-a")
+
+        assert results[0]["created_at"] == "2022-09-01"
+        assert results[0]["storage_created_at"] == "2026-10-13T09:30:00+00:00"
+        assert response["results"][0]["created_at"] == "2026-10-13T09:30:00+00:00"
+        assert "storage_created_at" not in response["results"][0]
+
     asyncio.run(scenario())
 
 

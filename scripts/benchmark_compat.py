@@ -6,7 +6,24 @@ Dates use an explicit source-date-in-text protocol, not historical storage time.
 """
 
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+
+SOURCE_TIME_PROTOCOL = "benchmark-source-time-v1"
+
+
+def _valid_source_date(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        if len(value) == 10:
+            date.fromisoformat(value)
+        elif len(value) > 10 and value[10] in {"T", "t", " "}:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            return False
+    except ValueError:
+        return False
+    return True
 
 
 def _fields(request, allowed):
@@ -142,3 +159,26 @@ def validate_result(response):
         ):
             raise ValueError("Invalid benchmark memory result")
     return response
+
+
+def normalize_source_dates(response):
+    """Project trusted source dates onto suite chronology without changing HTTP evidence."""
+    validate_result(response)
+    projected = dict(response)
+    rows = []
+    for row in response["results"]:
+        metadata = row.get("metadata")
+        if isinstance(metadata, dict) and "evaluation_source_date" in metadata:
+            source_date = metadata["evaluation_source_date"]
+            if not _valid_source_date(source_date):
+                raise ValueError("Invalid evaluation_source_date")
+            projected_row = dict(row)
+            if "created_at" in row:
+                if "storage_created_at" not in row:
+                    projected_row["storage_created_at"] = row["created_at"]
+            projected_row["created_at"] = source_date
+            rows.append(projected_row)
+        else:
+            rows.append(row)
+    projected["results"] = rows
+    return projected

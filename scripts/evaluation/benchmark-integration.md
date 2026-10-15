@@ -2,18 +2,77 @@
 
 ## Current scope — supersedes the historical sequencing below
 
-As of 2026-10-12, two complete LongMemEval histories have run through the isolated
+As of 2026-10-13, two original complete LongMemEval histories have run through the isolated
 HTTP service. One case passed reviewed checks; the other failed retrieval and
 exposed a false-positive answer judge. See [the active goal](active-goal.md) for
 current evidence, diagnosis and limits. Status claims dated 2026-10-07 below are
 historical, including statements that no wrapper or full history had run.
 
-Follow [the active goal](active-goal.md). Reuse memory-benchmarks against the
-existing isolated actual-product service, with Gemma and Qwen3-Embedding served
-by oMLX. Complete the existing authenticated adapter's prediction/scoring and
-checkpoint workflow; do not build a second benchmark wrapper. Start with one
-complete LongMemEval history, then a small fixed category slice. Langfuse is
-diagnostic enrichment, not a prerequisite for the initial benchmark result.
+The current user instruction is **repair observed failures before considering
+full benchmark suites**. No LoCoMo or BEAM evaluation has run locally; the two
+LongMemEval histories are question-level development evidence, not suite scores.
+Reuse the existing authenticated actual-product adapter, Gemma extraction and
+Qwen3-Embedding served by oMLX. Keep inference serial and preserve failed runs.
+
+### Versioned answer scoring
+
+Use `scripts/benchmark_judge.py` as the LongMemEval answer-scoring entrypoint.
+It installs `longmemeval-answer-judge-v1` into the pinned prepared suite before
+running the suite CLI; invoking the original runner alone does not install this
+repair. The protocol uses a neutral structured rubric, candidate-grounded quotes,
+explicit abstention eligibility and separate judge errors. Eight live synthetic
+controls passed, including wrong answers, incomplete answers, paraphrases and
+genuine abstention. That calibration does not establish general judge accuracy.
+
+Model-free CLI smoke command from the repository root:
+
+```bash
+PYTHONPATH=artifacts/evaluation/adaptations/longmemeval-checkpoint-v1/prepared:artifacts/evaluation/environments/benchmark-deps \
+  .venv/bin/python scripts/benchmark_judge.py --help
+```
+
+For an approved scoring run, select `--mode answerer`, explicit local answerer
+and judge endpoints/models, `--max-workers 1` and the agreed retrieval cutoffs.
+Keep original predictions and old judgments immutable; write new protocol-tagged
+results separately. Report judge error counts, answer coverage and reviewed
+accuracy alongside numeric scores: an error contributes zero to the existing
+suite aggregate but is not a semantic wrong-answer judgment. Retrieval-mode
+scoring is not replaced by this answer-judge adapter. Evidence and the CLI smoke
+output are under `artifacts/evaluation/repair-20261012/judge/`.
+
+### Historical source-time projection
+
+`scripts/benchmark_compat.py` defines `benchmark-source-time-v1`. The local
+`ProductBackend.search` projects trusted `metadata.evaluation_source_date` onto
+the suite's `created_at` chronology and preserves the native storage timestamp
+as `storage_created_at`. Repeated projection preserves that original storage
+timestamp; it does not replace it with an already-projected source date. Native
+HTTP responses, trace evidence and database creation times remain unchanged.
+Date-only observations retain day precision;
+Unix-source timestamps retain the adapter's UTC ISO precision. Missing source
+metadata leaves native chronology unchanged; invalid source dates raise rather
+than silently substituting the write date.
+
+This fixes a concrete adaptation defect: the frozen answer formatter groups
+memories by `created_at` and does not read source metadata. Backfilled 2022 facts
+were therefore presented under their 2026 storage dates. The actual formatter
+now renders the source date without mutating the saved response. The saved
+two-chunk diagnostic answered 33 and passed the repaired suite judge using one
+answerer request and one judge request. This is not a full-history score.
+
+Evidence: `artifacts/evaluation/repair-20261012/source-time/` and
+`answer-proof/run-003/`. That proof uses the original suite answer prompt, a
+1024-token answerer cap, a 512-token judge cap and no automatic retries.
+
+The full-history scorer separately checks ten explicitly reviewed runtime source
+hashes before prepared-module imports, credential lookup, or dispatch. A
+model-free negative control rejected a changed expected hash. Scoring requires
+complete source-history/HTTP-ledger reconciliation; the failed first-write
+`full-history/run-001` is not a scoreable substitute. The next owned preparation
+targets a fresh `run-002`, not an overwrite or automatic resume.
+
+Preserve failed scoring attempts: `run-001` lacks enough evidence to identify
+its cause; `run-002` failed at dependency import before model dispatch.
 
 The remaining sections preserve earlier analysis and commands, including stale
 startup status and superseded prerequisites. They are not the current execution
@@ -321,14 +380,25 @@ rejected until that behavior is supported. Destructive cleanup is rejected.
 The suite's generated user IDs need an immutable evaluation-prefix mapping and
 checkpoint provenance before use; never bypass prefix validation to make a run work.
 
-Python observability inspection confirms the product middleware emits X-Request-ID
-and request logs, but no Langfuse/OTLP spans were found in the inspected Python
-service/SDK source. Existing TypeScript instrumentation does not cover this path.
-The HTTP client now retains sanitized hex request IDs, status, one-attempt metadata
-and client latency in `last_evidence`, including HTTP failures. This is in-memory
-HTTP-boundary evidence only; it is not durable span capture, prompt/usage visibility
-or verified Langfuse export. Bind it to question/chunk lineage in a local ledger
-before adding actual server-side span propagation and readback validation.
+Historical source inspection on 2026-10-07 found the product middleware emitted
+`X-Request-ID` and request logs, but found no Langfuse/OTLP spans in the inspected
+Python service/SDK source. That finding predates the current tracing changes and
+describes historical inspection, not current deployment behavior.
+
+Current raw-code contract: `server/errors.py` generates request IDs as `mem0_`
+plus eight lowercase hexadecimal characters. The HTTP client retains the
+request ID as an opaque string only when it matches the bounded ASCII character
+set `[A-Za-z0-9_.:-]` and length 1–64; it is not hex-only. The value, status,
+one-attempt metadata and client latency are kept in in-memory `last_evidence`,
+including for HTTP failures. Earlier wire evidence included `41793e40`, which
+Langfuse coerced to `4.1793e44`, and numeric `52487650`, which it retained as an
+integer. Exact historical lookup therefore required reconciliation to a unique
+numeric value; numeric coercion is not an exact opaque-ID match.
+
+This client evidence is limited to the HTTP boundary, not durable span capture,
+prompt/usage visibility or verified Langfuse export. Current source code does
+not establish deployed behavior or successful Langfuse readback; do not claim a
+fixed export smoke until the parent verifies it against the deployment.
 
 ## Prepare an immutable source snapshot
 

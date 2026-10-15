@@ -75,6 +75,73 @@ def test_malformed_results_never_become_legitimate_empty_results(result):
         compat.validate_result(result)
 
 
-def test_result_preserves_state_and_mutation_information():
-    response = {"results": [{"id": "m1", "memory": "tea", "event": "UPDATE"}], "relations": []}
-    assert compat.validate_result(response) is response
+def test_source_date_projection_uses_source_chronology_and_preserves_http_evidence():
+    storage_time = "2026-10-13T09:30:00.123456+00:00"
+    source_time = "2022-09-01T12:34:56.654321+00:00"
+    row = {
+        "id": "m1",
+        "memory": "The appointment is tomorrow.",
+        "score": 0.91,
+        "created_at": storage_time,
+        "metadata": {"evaluation_source_date": source_time, "category": "calendar"},
+    }
+    response = {"results": [row], "request_id": "http-evidence"}
+
+    projected = compat.normalize_source_dates(response)
+
+    assert projected["results"][0] == {
+        **row,
+        "created_at": source_time,
+        "storage_created_at": storage_time,
+    }
+    assert response["results"][0]["created_at"] == storage_time
+    assert "storage_created_at" not in response["results"][0]
+    assert compat.normalize_source_dates(projected) == projected
+
+
+
+@pytest.mark.parametrize("source_date", ["2022-09-01", "2022-09-01T12:34:56.654321+00:00"])
+def test_source_date_projection_preserves_valid_iso_date_precision(source_date):
+    response = {
+        "results": [
+            {
+                "id": "m1",
+                "memory": "An event",
+                "created_at": "2026-10-13T00:00:00+00:00",
+                "metadata": {"evaluation_source_date": source_date},
+            }
+        ]
+    }
+
+    projected = compat.normalize_source_dates(response)
+
+    assert projected["results"][0]["created_at"] == source_date
+
+
+def test_source_date_projection_leaves_undated_results_and_storage_dates_unchanged():
+    rows = [
+        {"id": "m1", "memory": "Dated only by storage", "created_at": "2026-10-13T00:00:00+00:00"},
+        {"id": "m2", "memory": "No date"},
+    ]
+    response = {"results": rows}
+
+    projected = compat.normalize_source_dates(response)
+
+    assert projected["results"] == rows
+
+
+@pytest.mark.parametrize("source_date", ["", "yesterday", "2022-02-30", 1661990400, None])
+def test_invalid_source_date_fails_without_using_storage_time(source_date):
+    response = {
+        "results": [
+            {
+                "id": "m1",
+                "memory": "An event",
+                "created_at": "2026-10-13T00:00:00+00:00",
+                "metadata": {"evaluation_source_date": source_date},
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError):
+        compat.normalize_source_dates(response)

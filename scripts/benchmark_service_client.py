@@ -79,7 +79,7 @@ class LocalServiceClient:
 
         def request_id(headers):
             value = headers.get("X-Request-ID", "") if headers else ""
-            return value if isinstance(value, str) and re.fullmatch(r"[a-fA-F0-9]{8,32}", value) else None
+            return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", value) else None
 
         try:
             with self._opener.open(req, timeout=self.timeout) as response:

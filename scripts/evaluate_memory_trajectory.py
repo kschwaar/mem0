@@ -52,7 +52,7 @@ def model_metadata(config):
 
 
 def grade(expect, output):
-    rows = output.get("results", []) if isinstance(output, dict) else output
+    rows = output.get("results") if isinstance(output, dict) else output
     if not isinstance(rows, list) or any(not isinstance(row, dict) or "memory" not in row for row in rows):
         raise ValueError("Unsupported memory output shape")
     text = "\n".join(str(row["memory"]) for row in rows).casefold()

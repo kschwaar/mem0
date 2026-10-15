@@ -169,6 +169,10 @@ python3 scripts/evaluate_memory_trajectory.py \
   --output /tmp/mem0-trajectory-unique
 ```
 
+The trajectory grader accepts raw row lists or dictionaries with a list-valued
+`results` field. Missing or malformed envelopes are ungradable, not successful
+empty retrievals; they stop later checkpoints so corrupted state cannot pass.
+
 This calls configured models. Read expectations and adapter spans are saved
 locally; raw outputs require `--retain-outputs`. Phrase checks and a short
 trajectory do not establish long-term effectiveness or simulated aging.
