@@ -6,6 +6,7 @@ import pytest
 
 from mem0.configs.llms.base import BaseLlmConfig
 from mem0.configs.llms.openai import OpenAIConfig
+from mem0.exceptions import LLMError
 from mem0.llms.openai import OpenAILLM
 
 
@@ -110,6 +111,42 @@ def test_generate_response_without_tools(mock_openai_client):
         model="gpt-4.1-nano-2025-04-14", messages=messages, temperature=0.7, max_tokens=100, top_p=1.0
     )
     assert response == "I'm doing well, thank you for asking!"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"memory": [{"id": "0", "text": "User is 32"}',
+        '{"memory": []}',
+    ],
+)
+def test_structured_response_with_length_finish_reason_raises(mock_openai_client, content):
+    llm = OpenAILLM(OpenAIConfig(model="gpt-4.1-nano-2025-04-14"))
+    mock_response = Mock()
+    mock_response.choices = [
+        Mock(message=Mock(content=content), finish_reason="length")
+    ]
+    mock_openai_client.chat.completions.create.return_value = mock_response
+
+    with pytest.raises(LLMError):
+        llm.generate_response(
+            [{"role": "user", "content": "extract memories"}],
+            response_format={"type": "json_object"},
+        )
+
+
+@pytest.mark.parametrize("response_format", [None, {"type": "text"}, "text"])
+def test_plain_text_response_with_length_finish_reason_remains_available(mock_openai_client, response_format):
+    llm = OpenAILLM(OpenAIConfig(model="gpt-4.1-nano-2025-04-14"))
+    mock_response = Mock()
+    mock_response.choices = [
+        Mock(message=Mock(content="A deliberately partial chat answer"), finish_reason="length")
+    ]
+    mock_openai_client.chat.completions.create.return_value = mock_response
+
+    assert llm.generate_response(
+        [{"role": "user", "content": "chat"}], response_format=response_format
+    ) == "A deliberately partial chat answer"
 
 
 def test_generate_response_with_tools(mock_openai_client):

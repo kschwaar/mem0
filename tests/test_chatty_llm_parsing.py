@@ -11,7 +11,6 @@ import pytest
 
 from mem0.memory.utils import extract_json, remove_code_blocks
 
-
 # --- Test extract_json ---
 
 class TestExtractJson:
@@ -132,101 +131,3 @@ class TestRemoveCodeBlocks:
             json.loads(result)
 
 
-# --- Test the full fallback chain (remove_code_blocks -> extract_json) ---
-
-class TestFallbackChain:
-    """Tests the actual fallback pattern used in _add_to_vector_store:
-    try json.loads(remove_code_blocks(response))
-    except JSONDecodeError: json.loads(extract_json(response))
-    """
-
-    def _parse_with_fallback(self, response):
-        """Mimics the parsing logic in _add_to_vector_store."""
-        try:
-            return json.loads(remove_code_blocks(response), strict=False)
-        except json.JSONDecodeError:
-            extracted = extract_json(response)
-            return json.loads(extracted, strict=False)
-
-    def test_clean_json(self):
-        response = '{"memory": [{"id": "0", "text": "Name is Alex", "event": "ADD"}]}'
-        result = self._parse_with_fallback(response)
-        assert result["memory"][0]["text"] == "Name is Alex"
-
-    def test_markdown_wrapped(self):
-        response = '```json\n{"memory": [{"id": "0", "text": "Name is Alex", "event": "ADD"}]}\n```'
-        result = self._parse_with_fallback(response)
-        assert result["memory"][0]["text"] == "Name is Alex"
-
-    def test_chatty_markdown(self):
-        """Issue #3788: LLM wraps in conversational text + markdown."""
-        response = """Here is the extracted memory:
-```json
-{
-  "memory": [
-    {"id": "0", "text": "Name is Alex", "event": "ADD"},
-    {"id": "1", "text": "Love basketball", "event": "ADD"},
-    {"id": "2", "text": "Love gaming", "event": "ADD"}
-  ]
-}
-```
-I hope this helps!"""
-        result = self._parse_with_fallback(response)
-        assert len(result["memory"]) == 3
-        assert result["memory"][0]["text"] == "Name is Alex"
-        assert result["memory"][1]["text"] == "Love basketball"
-        assert result["memory"][2]["text"] == "Love gaming"
-
-    def test_chatty_no_markdown(self):
-        """Issue #3788: LLM wraps in conversational text without markdown."""
-        response = """Here is the memory update you requested:
-{
-  "memory": [
-    {"id": "0", "text": "Name is Alex", "event": "ADD"},
-    {"id": "1", "text": "Love basketball", "event": "ADD"}
-  ]
-}"""
-        result = self._parse_with_fallback(response)
-        assert len(result["memory"]) == 2
-
-    def test_think_tags_with_json(self):
-        """Reasoning model with <think> tags."""
-        response = '<think>Let me process this...</think>\n```json\n{"memory": [{"id": "0", "text": "test", "event": "ADD"}]}\n```'
-        result = self._parse_with_fallback(response)
-        assert result["memory"][0]["text"] == "test"
-
-    def test_lmstudio_style_response(self):
-        """Mimics the actual LM Studio response format from the issue."""
-        response = """{
-  "memory": [
-    {
-      "id": "0",
-      "text": "Name is Alex",
-      "event": "ADD"
-    },
-    {
-      "id": "1",
-      "text": "Love basketball",
-      "event": "ADD"
-    },
-    {
-      "id": "2",
-      "text": "Love gaming",
-      "event": "ADD"
-    }
-  ]
-}"""
-        result = self._parse_with_fallback(response)
-        assert len(result["memory"]) == 3
-
-    def test_completely_invalid_response(self):
-        """If both attempts fail, the outer except in main.py catches it."""
-        response = "I don't understand the question"
-        with pytest.raises(json.JSONDecodeError):
-            self._parse_with_fallback(response)
-
-    def test_facts_extraction_fallback(self):
-        """Also verify the pattern works for facts extraction responses."""
-        response = 'Sure! Here are the facts:\n{"facts": ["Name is Alex", "Loves basketball"]}\nHope that helps!'
-        result = self._parse_with_fallback(response)
-        assert result["facts"] == ["Name is Alex", "Loves basketball"]

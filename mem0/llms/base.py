@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Union
 
 from mem0.configs.llms.base import BaseLlmConfig
+from mem0.runtime_tracing import trace_call
 
 
 class LLMBase(ABC):
@@ -9,6 +10,12 @@ class LLMBase(ABC):
     Base class for all LLM providers.
     Handles common functionality and delegates provider-specific logic to subclasses.
     """
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        method = cls.__dict__.get("generate_response")
+        if method is not None:
+            cls.generate_response = trace_call("generate_response", "llm", "generation")(method)
 
     def __init__(self, config: Optional[Union[BaseLlmConfig, Dict]] = None):
         """Initialize a base LLM class

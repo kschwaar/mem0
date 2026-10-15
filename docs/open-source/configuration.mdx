@@ -147,6 +147,79 @@ See the full catalog in <Link href="/components/llms/overview">Components</Link>
   Mixing managed and self-hosted components? Make sure every outbound provider call has a secure network path. Managed rerankers and embedders often require outbound internet even if your vector store is on-prem.
 </Warning>
 
+## Optional local Langfuse tracing
+
+This checkout supports metadata-only OpenTelemetry tracing for OSS LLM, embedding,
+reranker, graph-extraction, and local inference boundaries. Tracing is disabled
+unless explicitly configured. Install the Python `tracing` extra; Node exporter,
+SDK, and async-context packages must be available even if your package manager
+normally omits optional dependencies.
+
+Supply `MEM0_RUNTIME_TRACING=true`, `LANGFUSE_PUBLIC_KEY`, and
+`LANGFUSE_SECRET_KEY` privately to the process. `LANGFUSE_BASE_URL` defaults to
+`http://localhost:4000`; use `http://host.docker.internal:4000` inside Docker.
+Only local/Docker hostnames and a root base URL are accepted.
+
+<CodeGroup>
+```python Python
+from mem0 import configure_tracing, flush_tracing
+
+runtime = configure_tracing()
+try:
+    results = memory.search(
+        "What are my preferences?",
+        filters={"user_id": "demo"},
+    )
+finally:
+    flush_tracing(runtime)
+```
+
+```typescript TypeScript
+import {
+  configureRuntimeTracing,
+  flushRuntimeTracing,
+  shutdownRuntimeTracing,
+} from "mem0ai/oss";
+
+await configureRuntimeTracing();
+try {
+  const results = await memory.search("What are my preferences?", {
+    filters: { user_id: "demo" },
+  });
+} finally {
+  await flushRuntimeTracing();
+  await shutdownRuntimeTracing();
+}
+```
+</CodeGroup>
+
+The examples use the `memory` instance configured above. The standalone Node
+`mem0ai/tracing` entry point also exports these lifecycle functions plus
+`traceRuntimeObject` and `instrumentRuntimeClient` for direct model clients.
+Build the current checkout before using that new entry point.
+Python's `trace_call` and Node's `withRuntimeSpan` cover custom provider boundaries.
+Owned exporters are shut down; application-owned tracing globals are not replaced.
+
+Spans include operation/model metadata, available numeric token usage, timing,
+and error status; Python also records sanitized exception type. They do not attach
+prompts, generated content, images, audio, vectors, API keys, or exception messages.
+SDK retries remain within logical calls; a complete framework run is not a count
+of its hidden model requests. Missing token usage and local-model pricing remain unknown.
+
+<Warning>
+  Never ship Langfuse project keys in browser code or `VITE_*`/`NEXT_PUBLIC_*`
+  variables. Browser examples export to a trusted loopback-only OTLP collector
+  at `http://localhost:4318/v1/traces`; the collector owns Langfuse authentication.
+  Explicitly enable tracing in the example's settings or its documented frontend
+  tracing flag. Close or consume streams so their observation can finish.
+</Warning>
+
+Validate delivery by querying Langfuse's authenticated
+`GET /api/public/v2/observations` after real inference, checking trace IDs, parents,
+types, and available usage. A healthy service or successful exporter flush alone
+does not prove ingestion. See the checkout's `server/RUNTIME_TRACING.md` for the
+collector profile, benchmark launcher, and queried local smoke evidence.
+
 ## Quick recovery
 
 - Qdrant connection errors: confirm port `6333` is exposed and the API key (if set) matches.

@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from mem0.configs.llms.base import BaseLlmConfig
 from mem0.configs.llms.openai import OpenAIConfig
+from mem0.exceptions import LLMError
 from mem0.llms.base import LLMBase
 from mem0.memory.utils import extract_json
 
@@ -144,10 +145,14 @@ class OpenAILLM(LLMBase):
 
         if response_format:
             params["response_format"] = response_format
-        if tools:  # TODO: Remove tools if no issues found with new memory addition logic
+        if tools:
             params["tools"] = tools
             params["tool_choice"] = tool_choice
         response = self.client.chat.completions.create(**params)
+        if response.choices[0].finish_reason == "length" and (
+            tools or (isinstance(response_format, dict) and response_format.get("type") in {"json_object", "json_schema"})
+        ):
+            raise LLMError("OpenAI structured response was truncated because it reached the token limit")
         parsed_response = self._parse_response(response, tools)
         if self.config.response_callback:
             try:

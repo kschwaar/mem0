@@ -82,37 +82,52 @@ class TestAddToVectorStoreErrors:
 
         return memory
 
-    def test_empty_llm_response_fact_extraction(self, mocker, mock_memory, caplog):
-        """Test invalid JSON response from LLM during extraction"""
-        # Setup
-        mock_memory.llm.generate_response.return_value = "invalid json"
+    @pytest.mark.parametrize(
+        "response",
+        [
+            "not json",
+            '{"memory": {}}',
+            '{"unexpected": []}',
+            '{"memory": [{"text": "User moved to Boston", "event": "UPDATE"}]}',
+            '{"memory": [{"id": "99", "text": "Retracted fact", "event": "DELETE"}]}',
+        ],
+    )
+    def test_invalid_extraction_response_raises_without_checkpointing(self, mocker, mock_memory, response):
+        mock_memory.llm.generate_response.return_value = response
         mocker.patch("mem0.memory.main.capture_event")
 
-        # Execute
-        with caplog.at_level(logging.ERROR):
-            result = mock_memory._add_to_vector_store(
+        with pytest.raises(LLMError):
+            mock_memory._add_to_vector_store(
                 messages=[{"role": "user", "content": "test"}], metadata={}, filters={}, infer=True
             )
 
-        # Verify — v3 single-pass pipeline makes 1 LLM call, returns [] on parse error
-        assert mock_memory.llm.generate_response.call_count == 1
+        mock_memory.db.save_messages.assert_not_called()
+        mock_memory.vector_store.insert.assert_not_called()
+
+    def test_explicit_empty_extraction_is_allowed(self, mock_memory):
+        mock_memory.llm.generate_response.return_value = '{"memory": []}'
+
+        result = mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "test"}], metadata={}, filters={}, infer=True
+        )
+
         assert result == []
-        assert any("Error parsing extraction response" in record.message for record in caplog.records), "Expected error message not found in logs"
+        mock_memory.vector_store.insert.assert_not_called()
 
-    def test_empty_llm_response_memory_actions(self, mock_memory, caplog):
-        """Test empty response from LLM during memory actions (v3: single-pass, 1 LLM call)"""
-        # Setup — v3 pipeline does a single LLM call that returns empty/invalid response
-        mock_memory.llm.generate_response.return_value = ""
+    def test_chatty_valid_json_extraction_is_preserved(self, mock_memory):
+        mock_memory.llm.generate_response.return_value = (
+            'Here are the extracted memories:\n```json\n'
+            '{"memory": [{"id": "0", "text": "User likes basketball", "event": "ADD"}]}\n'
+            '```\nHope that helps!'
+        )
+        mock_memory.embedding_model.embed_batch.return_value = [[0.1, 0.2, 0.3]]
 
-        # Execute
-        with caplog.at_level(logging.WARNING):
-            result = mock_memory._add_to_vector_store(
-                messages=[{"role": "user", "content": "test"}], metadata={}, filters={}, infer=True
-            )
+        result = mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I like basketball"}], metadata={}, filters={}, infer=True
+        )
 
-        # Verify — v3 only makes 1 LLM call (no separate merge step)
-        assert mock_memory.llm.generate_response.call_count == 1
-        assert result == []  # Should return empty list when no memories processed
+        assert [item["memory"] for item in result] == ["User likes basketball"]
+        mock_memory.vector_store.insert.assert_called_once()
 
     def test_llm_extraction_exception_is_reraised(self, mocker, mock_memory):
         """A provider error during fact extraction must propagate, not be swallowed.
@@ -132,8 +147,6 @@ class TestAddToVectorStoreErrors:
             mock_memory._add_to_vector_store(
                 messages=[{"role": "user", "content": "test"}], metadata={}, filters={}, infer=True
             )
-        # The documented LLMError contract is honoured, and the original
-        # provider exception is preserved as the cause for debugging.
         assert isinstance(exc_info.value.__cause__, _ProviderError)
 
     def test_conflicting_fact_updates_existing_memory_instead_of_adding(self, mocker, mock_memory):
@@ -171,6 +184,97 @@ class TestAddToVectorStoreErrors:
         ]
         mock_memory._update_memory.assert_called_once()
         mock_memory.vector_store.insert.assert_not_called()
+
+    def test_none_without_replacement_text_is_a_noop(self, mocker, mock_memory):
+        mocker.patch.object(mock_memory, "_update_memory")
+        mocker.patch.object(mock_memory, "_delete_memory")
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+        mock_memory.vector_store.search.return_value = [existing]
+        mock_memory.llm.generate_response.return_value = json.dumps(
+            {"memory": [{"id": "irrelevant", "event": "NONE", "old_memory": "User likes tea"}]}
+        )
+
+        result = mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I still like tea"}], metadata={}, filters={}, infer=True
+        )
+
+        assert result == []
+        mock_memory.embedding_model.embed_batch.assert_not_called()
+        mock_memory.vector_store.insert.assert_not_called()
+        mock_memory._update_memory.assert_not_called()
+        mock_memory._delete_memory.assert_not_called()
+
+    def test_mixed_add_and_none_embeds_and_persists_only_add(self, mocker, mock_memory):
+        mocker.patch.object(mock_memory, "_update_memory")
+        mocker.patch.object(mock_memory, "_delete_memory")
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+        mock_memory.vector_store.search.return_value = [existing]
+        mock_memory.llm.generate_response.return_value = json.dumps(
+            {
+                "memory": [
+                    {"text": "User owns a red bicycle", "event": "ADD"},
+                    {"event": "NONE"},
+                    {"id": "not-an-existing-memory", "event": "NONE", "old_memory": "User likes tea"},
+                ]
+            }
+        )
+        mock_memory.embedding_model.embed_batch.return_value = [[0.4, 0.5, 0.6]]
+
+        result = mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I bought a red bicycle"}], metadata={}, filters={}, infer=True
+        )
+
+        assert [item["memory"] for item in result] == ["User owns a red bicycle"]
+        mock_memory.vector_store.insert.assert_called_once()
+        assert mock_memory.vector_store.insert.call_args.kwargs["payloads"][0]["data"] == "User owns a red bicycle"
+        mock_memory._update_memory.assert_not_called()
+        mock_memory._delete_memory.assert_not_called()
+
+    def test_delete_without_replacement_text_uses_existing_record(self, mocker, mock_memory):
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+        mock_memory.vector_store.search.return_value = [existing]
+        mock_memory.llm.generate_response.return_value = json.dumps({"memory": [{"id": "0", "event": "DELETE"}]})
+        mocker.patch.object(mock_memory, "_delete_memory")
+
+        result = mock_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I no longer like tea"}], metadata={}, filters={}, infer=True
+        )
+
+        assert result == [{"id": "memory-1", "memory": "User likes tea", "event": "DELETE"}]
+        mock_memory._delete_memory.assert_called_once_with("memory-1", existing_memory=existing)
+        mock_memory.embedding_model.embed_batch.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            {"event": "UPDATE", "text": "User owns a red bicycle"},
+            {"id": "99", "event": "UPDATE", "text": "User owns a red bicycle"},
+            {"event": "DELETE"},
+            {"id": "99", "event": "DELETE"},
+        ],
+    )
+    def test_invalid_mutation_id_blocks_entire_batch_before_writes(self, mocker, mock_memory, mutation):
+        mocker.patch.object(mock_memory, "_delete_memory")
+        mocker.patch.object(mock_memory, "_update_memory")
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+        mock_memory.vector_store.search.return_value = [existing]
+        mock_memory.llm.generate_response.return_value = json.dumps(
+            {"memory": [{"text": "User owns a red bicycle", "event": "ADD"}, mutation]}
+        )
+
+        with pytest.raises(LLMError):
+            mock_memory._add_to_vector_store(
+                messages=[{"role": "user", "content": "I bought a red bicycle"}],
+                metadata={},
+                filters={},
+                infer=True,
+            )
+
+        mock_memory.embedding_model.embed_batch.assert_not_called()
+        mock_memory.vector_store.insert.assert_not_called()
+        mock_memory.db.save_messages.assert_not_called()
+        mock_memory._delete_memory.assert_not_called()
+        mock_memory._update_memory.assert_not_called()
 
 
 class TestPromptOverridesCustomInstructions:
@@ -329,36 +433,41 @@ class TestAsyncAddToVectorStoreErrors:
 
         return memory
 
-    @pytest.mark.asyncio
-    async def test_async_empty_llm_response_fact_extraction(self, mock_async_memory, caplog, mocker):
-        """Test invalid JSON response from LLM during extraction (async)"""
-        mocker.patch("mem0.utils.factory.EmbedderFactory.create", return_value=MagicMock())
-        mock_async_memory.llm.generate_response.return_value = "invalid json"
+    @pytest.mark.parametrize(
+        "response",
+        [
+            "not json",
+            '{"memory": {}}',
+            '{"unexpected": []}',
+            '{"memory": [{"text": "User moved to Boston", "event": "UPDATE"}]}',
+            '{"memory": [{"id": "99", "text": "Retracted fact", "event": "DELETE"}]}',
+        ],
+    )
+    async def test_async_invalid_extraction_response_raises_without_checkpointing(
+        self, mock_async_memory, mocker, response
+    ):
+        mock_async_memory.llm.generate_response.return_value = response
         mocker.patch("mem0.memory.main.capture_event")
 
-        with caplog.at_level(logging.ERROR):
-            result = await mock_async_memory._add_to_vector_store(
+        with pytest.raises(LLMError):
+            await mock_async_memory._add_to_vector_store(
                 messages=[{"role": "user", "content": "test"}], metadata={}, effective_filters={}, infer=True
             )
-        assert mock_async_memory.llm.generate_response.call_count == 1
-        assert result == []
-        assert any("Error parsing extraction response" in record.message for record in caplog.records), "Expected error message not found in logs"
+
+        mock_async_memory.vector_store.insert.assert_not_called()
+        mock_async_memory.db.save_messages.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_async_empty_llm_response_memory_actions(self, mock_async_memory, caplog, mocker):
-        """Test empty response in AsyncMemory._add_to_vector_store (v3: single-pass, 1 LLM call)"""
-        mocker.patch("mem0.utils.factory.EmbedderFactory.create", return_value=MagicMock())
-        mock_async_memory.llm.generate_response.return_value = ""
-        mock_capture_event = mocker.MagicMock()
-        mocker.patch("mem0.memory.main.capture_event", mock_capture_event)
+    async def test_async_explicit_empty_extraction_is_allowed(self, mock_async_memory, mocker):
+        mock_async_memory.llm.generate_response.return_value = '{"memory": []}'
+        mocker.patch("mem0.memory.main.capture_event")
 
-        with caplog.at_level(logging.WARNING):
-            result = await mock_async_memory._add_to_vector_store(
-                messages=[{"role": "user", "content": "test"}], metadata={}, effective_filters={}, infer=True
-            )
+        result = await mock_async_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "test"}], metadata={}, effective_filters={}, infer=True
+        )
 
         assert result == []
-        assert mock_async_memory.llm.generate_response.call_count == 1
+        mock_async_memory.vector_store.insert.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_llm_extraction_exception_is_reraised(self, mock_async_memory, mocker):
@@ -418,6 +527,119 @@ class TestAsyncAddToVectorStoreErrors:
         ]
         mock_async_memory._update_memory.assert_awaited_once()
         mock_async_memory.vector_store.insert.assert_not_called()
+
+    async def test_async_none_without_text_and_delete_without_text(self, mocker, mock_async_memory):
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+        mock_async_memory.vector_store.search.return_value = [existing]
+        mock_async_memory.llm.generate_response.return_value = json.dumps(
+            {
+                "memory": [
+                    {"event": "NONE"},
+                    {"id": "0", "event": "DELETE"},
+                ]
+            }
+        )
+        mocker.patch.object(mock_async_memory, "_delete_memory", new=mocker.AsyncMock())
+
+        result = await mock_async_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I no longer like tea"}],
+            metadata={},
+            effective_filters={},
+            infer=True,
+        )
+
+        assert result == [{"id": "memory-1", "memory": "User likes tea", "event": "DELETE"}]
+        mock_async_memory.embedding_model.embed_batch.assert_not_called()
+        mock_async_memory._delete_memory.assert_awaited_once_with("memory-1", existing_memory=existing)
+        mock_async_memory.vector_store.insert.assert_not_called()
+
+
+    async def test_async_none_without_text_and_id_is_a_noop(self, mocker, mock_async_memory):
+        mocker.patch.object(mock_async_memory, "_update_memory", new=mocker.AsyncMock())
+        mocker.patch.object(mock_async_memory, "_delete_memory", new=mocker.AsyncMock())
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+        mock_async_memory.vector_store.search.return_value = [existing]
+        mock_async_memory.llm.generate_response.return_value = '{"memory": [{"event": "NONE"}]}'
+
+        result = await mock_async_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I still like tea"}],
+            metadata={},
+            effective_filters={},
+            infer=True,
+        )
+
+        assert result == []
+        mock_async_memory.embedding_model.embed_batch.assert_not_called()
+        mock_async_memory.vector_store.insert.assert_not_called()
+        mock_async_memory._update_memory.assert_not_awaited()
+        mock_async_memory._delete_memory.assert_not_awaited()
+
+    async def test_async_mixed_add_and_none_persists_only_add(self, mocker, mock_async_memory):
+        existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+        mock_async_memory.vector_store.search.return_value = [existing]
+        mock_async_memory.llm.generate_response.return_value = json.dumps(
+            {
+                "memory": [
+                    {"text": "User owns a red bicycle", "event": "ADD"},
+                    {"event": "NONE"},
+                    {"id": "not-an-existing-memory", "event": "NONE", "old_memory": "User likes tea"},
+                ]
+            }
+        )
+        mock_async_memory.embedding_model.embed_batch.return_value = [[0.4, 0.5, 0.6]]
+        mocker.patch.object(mock_async_memory, "_update_memory", new=mocker.AsyncMock())
+        mocker.patch.object(mock_async_memory, "_delete_memory", new=mocker.AsyncMock())
+
+        result = await mock_async_memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I bought a red bicycle"}],
+            metadata={},
+            effective_filters={},
+            infer=True,
+        )
+
+        assert [item["memory"] for item in result] == ["User owns a red bicycle"]
+        mock_async_memory.vector_store.insert.assert_called_once()
+        assert (
+            mock_async_memory.vector_store.insert.call_args.kwargs["payloads"][0]["data"] == "User owns a red bicycle"
+        )
+        mock_async_memory._update_memory.assert_not_awaited()
+        mock_async_memory._delete_memory.assert_not_awaited()
+
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"event": "UPDATE", "text": "User owns a red bicycle"},
+        {"id": "99", "event": "UPDATE", "text": "User owns a red bicycle"},
+        {"event": "DELETE"},
+        {"id": "99", "event": "DELETE"},
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_invalid_mutation_id_blocks_entire_batch_before_writes(mocker, mutation):
+    memory = _build_memory_instance(mocker, AsyncMemory)
+    existing = SimpleNamespace(id="memory-1", payload={"data": "User likes tea"})
+    memory.vector_store.search.return_value = [existing]
+    memory.llm.generate_response.return_value = json.dumps(
+        {"memory": [{"text": "User owns a red bicycle", "event": "ADD"}, mutation]}
+    )
+    mocker.patch.object(memory, "_delete_memory", new=mocker.AsyncMock())
+    mocker.patch.object(memory, "_update_memory", new=mocker.AsyncMock())
+
+    with pytest.raises(LLMError):
+        await memory._add_to_vector_store(
+            messages=[{"role": "user", "content": "I bought a red bicycle"}],
+            metadata={},
+            effective_filters={},
+            infer=True,
+        )
+
+    memory.embedding_model.embed_batch.assert_not_called()
+    memory.vector_store.insert.assert_not_called()
+    memory.db.save_messages.assert_not_called()
+    memory._delete_memory.assert_not_awaited()
+    memory._update_memory.assert_not_awaited()
 
 
 def _build_memory_instance(mocker, memory_cls):

@@ -109,9 +109,9 @@ llm_config = {
         "model": "gemma-4-12B-it-4bit",
         "openai_base_url": "http://127.0.0.1:8080/v1",
         "temperature": 0,
-        "max_tokens": 256,
+        "max_tokens": 2048,
         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
-        "request_timeout": 30,
+        "request_timeout": 120,
         "max_retries": 0,
     },
 }
@@ -120,12 +120,26 @@ llm_config = {
 `extra_body` is opt-in and passed to the OpenAI SDK; its fields must be supported
 by your backend. A per-call `extra_body` replaces the configured dictionary.
 Avoid conflicting standard fields such as `model` or `messages` in this dictionary.
-`request_timeout` is a positive finite timeout in seconds, not a whole-experiment
-deadline or proof of server cancellation. `max_retries` is a nonnegative integer;
-zero disables SDK retries. Omitting these options preserves SDK defaults.
+`request_timeout` is a positive finite SDK timeout in seconds, not a total
+wall-clock deadline or proof of server cancellation. The HTTPX transport applies
+timeouts per connect/read/write/pool phase; the read timeout limits inactivity
+between reads, so an active response can exceed that value in total elapsed time.
+`max_retries` is a nonnegative integer; zero disables SDK retries. Omitting these
+options preserves SDK defaults.
 Use the server's key through `OPENAI_API_KEY`; do not save keys in configuration
 files. Unset `OPENROUTER_API_KEY` when testing a local endpoint because it selects
 the OpenRouter route. These options do not configure embeddings, other provider
 clients, or the TypeScript SDK.
+
+Structured responses requested with `response_format` or tools that end with
+`finish_reason="length"` raise `LLMError`, even when the returned prefix happens
+to be valid JSON. Plain-text calls still return intentionally limited text.
+Memory extraction also raises `LLMError` for malformed responses rather than
+treating them as a successful empty write; an explicit `{"memory": []}` remains
+a valid no-facts result.
+
+Size the output allowance for your inputs and inspect generation finish reasons.
+A larger allowance alone does not fix an extractor that repeatedly emits
+unchanged memories. Verify persisted facts, not just a successful HTTP response.
 
 All available parameters for the `openai` config are present in [Master List of All Params in Config](../config).

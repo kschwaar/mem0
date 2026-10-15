@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import re
 from typing import Any, Dict, List
@@ -8,6 +9,8 @@ from mem0.configs.prompts import (
     FACT_RETRIEVAL_PROMPT,
     USER_MEMORY_EXTRACTION_PROMPT,
 )
+from mem0.exceptions import LLMError
+from mem0.runtime_tracing import trace_call
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +161,47 @@ def extract_json(text):
     return json_str
 
 
+def parse_memory_extraction(response, existing_memory_ids):
+    """Parse and validate an LLM memory extraction response before pipeline mutations."""
+    if not isinstance(response, str) or not response.strip():
+        raise LLMError("Memory extraction response is empty or is not text")
+
+    content = remove_code_blocks(response)
+    try:
+        parsed = json.loads(content, strict=False)
+    except json.JSONDecodeError:
+        try:
+            parsed = json.loads(extract_json(content), strict=False)
+        except (TypeError, json.JSONDecodeError) as e:
+            raise LLMError(f"Memory extraction response is not valid JSON: {e}") from e
+
+    if isinstance(parsed, list):
+        memories = parsed
+    elif isinstance(parsed, dict) and isinstance(parsed.get("memory"), list):
+        memories = parsed["memory"]
+    else:
+        raise LLMError("Memory extraction response must contain a memory array")
+
+    for index, memory in enumerate(memories):
+        if not isinstance(memory, dict):
+            raise LLMError(f"Memory extraction entry {index} must be an object")
+        event = memory.get("event", "ADD")
+        if not isinstance(event, str) or event.upper() not in {"ADD", "UPDATE", "DELETE", "NONE"}:
+            raise LLMError(f"Memory extraction entry {index} has an unsupported action")
+        event = event.upper()
+        if event in {"ADD", "UPDATE"}:
+            text = memory.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise LLMError(f"Memory extraction entry {index} must contain non-empty text")
+        if event in {"UPDATE", "DELETE"}:
+            # NONE is a non-referential no-op; its model annotations are unused.
+            memory_id = memory.get("id")
+            if not isinstance(memory_id, str) or memory_id not in existing_memory_ids:
+                raise LLMError(f"Memory extraction entry {index} must reference a known existing-memory id")
+    return memories
+
+
+@trace_call("image_description", "multimodal")
 def get_image_description(image_obj, llm, vision_details):
     """
     Get the description of the image
