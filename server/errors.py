@@ -65,7 +65,7 @@ def _classify(exc: BaseException | None) -> tuple[str, str]:
 
 
 def new_request_id() -> str:
-    return uuid.uuid4().hex[:8]
+    return f"mem0_{uuid.uuid4().hex[:8]}"
 
 
 def upstream_error() -> UpstreamError:

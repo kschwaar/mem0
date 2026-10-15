@@ -7,6 +7,7 @@ __pycache__/
 # Self-hosted server local runtime state
 server/history/
 server/.env
+server/.env.pilot
 
 # C extensions
 *.so

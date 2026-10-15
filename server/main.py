@@ -37,13 +37,12 @@ from routers import auth as auth_router
 from routers import entities as entities_router
 from routers import platform_compat as platform_compat_router
 from routers import requests as requests_router
-from runtime_tracing import build_exporter, http_status, request_span, shutdown_exporter
+from runtime_tracing import http_status, request_span
 from schemas import MessageResponse
 from server_state import (
     get_current_config,
     get_memory_instance,
     initialize_state,
-    set_runtime_tracer,
     set_session_factory,
     update_config,
 )
@@ -52,6 +51,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import func, select
 
 from mem0.exceptions import ValidationError as Mem0ValidationError
+from mem0.runtime_tracing import configure_tracing, flush_tracing
 
 load_dotenv()
 
@@ -222,14 +222,15 @@ if relationship_graph_config is not None:
     DEFAULT_CONFIG["relationship_graph"] = relationship_graph_config
 
 
-_runtime_tracer, _runtime_trace_provider = build_exporter(os.environ) or (None, None)
+_runtime_tracing = configure_tracing(os.environ)
+_runtime_tracer = _runtime_tracing.tracer if _runtime_tracing is not None else None
+if _runtime_tracing is not None:
+    _runtime_tracing.request_id = request_id_var.get
 try:
-    if _runtime_tracer is not None:
-        set_runtime_tracer(_runtime_tracer, request_id_var.get)
     set_session_factory(SessionLocal)
     initialize_state(DEFAULT_CONFIG)
 except BaseException:
-    shutdown_exporter(_runtime_trace_provider)
+    flush_tracing(_runtime_tracing)
     raise
 
 
@@ -238,7 +239,7 @@ async def lifespan(_app):
     try:
         yield
     finally:
-        await asyncio.to_thread(shutdown_exporter, _runtime_trace_provider)
+        await asyncio.to_thread(flush_tracing, _runtime_tracing)
 
 
 app = FastAPI(

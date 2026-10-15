@@ -1,0 +1,35 @@
+# Local-only browser receiver; project credentials stay inside the collector.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - http://localhost:*
+            - http://127.0.0.1:*
+            - chrome-extension://*
+          allowed_headers:
+            - Content-Type
+processors:
+  transform/metadata_only:
+    trace_statements:
+      - context: span
+        statements:
+          - keep_keys(attributes, ["langfuse.observation.type", "langfuse.observation.model.name", "langfuse.observation.usage_details", "mem0.provider.role", "mem0.provider.method", "mem0.provider.class", "mem0.attempt_scope", "mem0.outcome", "mem0.elapsed_ms", "mem0.error_type", "gen_ai.provider.name", "gen_ai.operation.name"])
+  batch:
+    timeout: 1s
+    send_batch_size: 32
+exporters:
+  otlphttp/langfuse:
+    traces_endpoint: http://host.docker.internal:4000/api/public/otel/v1/traces
+    headers:
+      Authorization: Basic ${env:LANGFUSE_OTLP_AUTH}
+      x-langfuse-ingestion-version: "4"
+    timeout: 5s
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/metadata_only, batch]
+      exporters: [otlphttp/langfuse]

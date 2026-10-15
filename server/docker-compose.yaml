@@ -31,6 +31,10 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - AUTH_DISABLED=${AUTH_DISABLED:-false}
       - MEM0_TELEMETRY=${MEM0_TELEMETRY:-true}
+      - MEM0_RUNTIME_TRACING=${MEM0_RUNTIME_TRACING:-false}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://host.docker.internal:4000}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - MEM0_DEFAULT_LLM_MODEL=${MEM0_DEFAULT_LLM_MODEL:-gpt-4.1-nano-2025-04-14}
@@ -54,6 +58,19 @@ services:
       - MEM0_HUGGINGFACE_RERANKER_MODEL=${MEM0_HUGGINGFACE_RERANKER_MODEL:-BAAI/bge-reranker-base}
       - MEM0_RERANKER_DEVICE=${MEM0_RERANKER_DEVICE:-cpu}
       - MEM0_RERANKER_TOP_K=${MEM0_RERANKER_TOP_K:-10}
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0@sha256:ffc818ee108d0b934fd14207fd87ff247c9b64f344ed349d0b66c166c18a2312
+    profiles: ["tracing"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4318:4318"
+    environment:
+      LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:-}
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    mem_limit: 256m
+    cpus: 0.5
 
   postgres:
     image: pgvector/pgvector:pg17

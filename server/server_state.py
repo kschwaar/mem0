@@ -10,32 +10,8 @@ _state_lock = threading.RLock()
 _current_config: Dict[str, Any] = {}
 _memory_instance: Memory | None = None
 _session_factory: Callable | None = None
-_runtime_tracing: tuple[Any, Callable[[], str]] | None = None
-
-
-def set_runtime_tracer(tracer: Any, request_id: Callable[[], str]) -> None:
-    """Register explicit tracing before initialization; disabled by default.
-
-    Exporter ownership/shutdown remains with the application. Do not switch
-    tracers underneath an already constructed shared Memory instance.
-    """
-    global _runtime_tracing
-    if not callable(getattr(tracer, "start_span", None)) or not callable(request_id):
-        raise ValueError("Runtime tracing requires a tracer and request-ID getter")
-    with _state_lock:
-        if _memory_instance is not None or _runtime_tracing is not None:
-            raise RuntimeError("Runtime tracer must be registered once before memory initialization")
-        _runtime_tracing = (tracer, request_id)
-
-
 def _build_memory(config: Dict[str, Any]) -> Memory:
-    memory = Memory.from_config(config)
-    if _runtime_tracing is not None:
-        from runtime_tracing import attach_memory
-
-        tracer, request_id = _runtime_tracing
-        attach_memory(memory, tracer, request_id)
-    return memory
+    return Memory.from_config(config)
 
 
 def set_session_factory(factory: Callable) -> None:

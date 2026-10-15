@@ -185,6 +185,7 @@ Implemented:
    - `POST /v3/memories/add/`
    - `POST /v3/memories/search/`
    - `POST /v3/memories/`
+   - `POST /v2/memories/` (legacy plugin forget-list compatibility; same paging and filters)
    - `GET/PUT/DELETE /v1/memories/{id}/`
    - `GET /v1/memories/{id}/history/`
    - `DELETE /v1/memories/`
@@ -210,6 +211,13 @@ Implemented:
 Local compatibility no-ops: hosted-only fields such as `rerank`,
 `keyword_search`, `fields`, `categories`, `immutable`, and `source` are accepted
 where the CLI/plugin send them. Fields without an OSS equivalent are ignored.
+
+- Filter translation supports nested `AND`/`OR`/`NOT` and maps hosted
+  `metadata` fields to flat OSS payload fields. For plugin directory filters,
+  `metadata.dirs.contains` is translated to exact membership (`eq`) because
+  `dirs` stores directory-chain entries as an array; arbitrary `contains`
+  filters retain their substring semantics. Duplicate metadata and flat payload
+  predicates are rejected with HTTP 400 rather than overwriting a constraint.
 
 ## Minimal local target
 

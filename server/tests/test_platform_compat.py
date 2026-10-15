@@ -1,6 +1,5 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -72,6 +71,74 @@ def make_client(monkeypatch, memory=None):
     return TestClient(app), fake
 
 
+def test_v2_list_pages_until_exhaustion_and_selects_all_memory_ids(monkeypatch):
+    class PagedMemory(FakeMemory):
+        def get_all(self, **params):
+            return {
+                "results": [
+                    {"id": memory_id, "memory": memory_id}
+                    for memory_id in ("mem-1", "mem-2", "mem-3")[:params["top_k"]]
+                ]
+            }
+
+    client, _ = make_client(monkeypatch, PagedMemory())
+    pages = []
+    for page in (1, 2, 3):
+        response = client.post(
+            f"/v2/memories/?page={page}&page_size=2",
+            json={"filters": {"user_id": "user-1"}},
+        )
+        assert response.status_code == 200
+        pages.append([item["id"] for item in response.json()["results"]])
+        if not response.json()["results"]:
+            break
+
+    assert pages == [["mem-1", "mem-2"], ["mem-3"], []]
+
+
+def test_v2_list_promotes_app_id_without_dropping_metadata(monkeypatch):
+    class MetadataMemory(FakeMemory):
+        def get_all(self, **params):
+            return {
+                "results": [
+                    {"id": "mem-app", "memory": "local", "metadata": {"app_id": "proj", "tag": "keep"}}
+                ]
+            }
+
+    client, _ = make_client(monkeypatch, MetadataMemory())
+    response = client.post("/v2/memories/?page_size=10", json={"filters": {"user_id": "u1"}})
+
+    assert response.status_code == 200
+    assert response.json()["results"] == [
+        {
+            "id": "mem-app",
+            "memory": "local",
+            "app_id": "proj",
+            "metadata": {"app_id": "proj", "tag": "keep"},
+        }
+    ]
+
+
+def test_v2_list_paginates_beyond_thousand_results(monkeypatch):
+    class LargeMemory(FakeMemory):
+        def get_all(self, **params):
+            return {
+                "results": [
+                    {"id": f"mem-{index}", "memory": f"memory {index}"}
+                    for index in range(min(params["top_k"], 1001))
+                ]
+            }
+
+    client, _ = make_client(monkeypatch, LargeMemory())
+    response = client.post("/v2/memories/?page=11&page_size=100", json={"filters": {"user_id": "u1"}})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["results"]] == ["mem-1000"]
+    exhausted = client.post("/v2/memories/?page=12&page_size=100", json={"filters": {"user_id": "u1"}})
+    assert exhausted.status_code == 200
+    assert exhausted.json()["results"] == []
+
+
 def test_v3_add_preserves_app_id_in_metadata_and_returns_event(monkeypatch):
     client, fake = make_client(monkeypatch)
 
@@ -103,39 +170,111 @@ def test_v3_search_preserves_app_id_filter(monkeypatch):
     assert fake.search_calls[0]["filters"] == {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]}
 
 
-def test_v3_search_plugin_filter_reaches_real_memory_search(monkeypatch):
-    """Consumer/provider contract for the nested filter emitted by coding-agent plugins."""
+def make_qdrant_store():
+    from qdrant_client import QdrantClient, models
+
+    from mem0.vector_stores.qdrant import Qdrant
+
+    store = object.__new__(Qdrant)
+    store.client = QdrantClient(":memory:")
+    store.collection_name = "boundary"
+    store.client.create_collection(
+        collection_name=store.collection_name,
+        vectors_config=models.VectorParams(size=2, distance=models.Distance.COSINE),
+    )
+    payloads = [
+        {"data": "matching", "agent_id": "proj", "app_id": "proj", "dirs": ["src", "src/components"]},
+        {"data": "sibling", "agent_id": "proj", "app_id": "proj", "dirs": ["src-other"]},
+        {"data": "personal", "user_id": "u1", "app_id": "proj", "dirs": ["notes"]},
+        {"data": "other", "user_id": "other", "app_id": "proj", "dirs": ["src"]},
+    ]
+    store.client.upsert(
+        collection_name=store.collection_name,
+        points=[
+            models.PointStruct(id=index, vector=[1.0, 0.0], payload=payload)
+            for index, payload in enumerate(payloads, 1)
+        ],
+    )
+    return store
+
+
+def test_v3_search_plugin_directory_filter_matches_exact_directory_chain(monkeypatch):
     from mem0.memory.main import Memory
 
-    memory = object.__new__(Memory)
-    memory.api_version = "v1.1"
-    memory.reranker = None
-    memory._search_vector_store = MagicMock(return_value=[])
-    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *args, **kwargs: None)
-    client, _ = make_client(monkeypatch, memory)
+    store = make_qdrant_store()
+    try:
+        memory = object.__new__(Memory)
+        memory.api_version = "v1.1"
+        memory.reranker = None
 
-    response = client.post(
-        "/v3/memories/search/",
-        json={
-            "query": "local",
-            "filters": {
-                "OR": [
-                    {"AND": [{"agent_id": "proj"}, {"app_id": "proj"}]},
-                    {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]},
-                ]
+        def search_vectors(query, filters, limit, threshold, **kwargs):
+            return [
+                {"id": str(row.id), "memory": row.payload["data"], "score": row.score}
+                for row in store.search(query, [1.0, 0.0], top_k=limit, filters=filters)
+            ]
+
+        memory._search_vector_store = search_vectors
+        monkeypatch.setattr("mem0.memory.main.capture_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *args, **kwargs: None)
+        client, _ = make_client(monkeypatch, memory)
+        response = client.post(
+            "/v3/memories/search/",
+            json={
+                "query": "local",
+                "filters": {
+                    "OR": [
+                        {"AND": [
+                            {"agent_id": "proj"}, {"app_id": "proj"},
+                            {"metadata": {"dirs": {"contains": "src"}}},
+                        ]},
+                        {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]},
+                    ]
+                },
             },
-        },
-    )
+        )
+        assert response.status_code == 200
+        assert {item["memory"] for item in response.json()["results"]} == {"matching", "personal"}
+    finally:
+        store.client.close()
 
-    assert response.status_code == 200
-    memory._search_vector_store.assert_called_once()
-    assert memory._search_vector_store.call_args.args[1] == {
-        "$or": [
-            {"AND": [{"agent_id": "proj"}, {"app_id": "proj"}]},
-            {"AND": [{"user_id": "u1"}, {"app_id": "proj"}]},
-        ]
-    }
+
+def test_v3_search_rejects_ambiguous_metadata_payload_collisions(monkeypatch):
+    client, _ = make_client(monkeypatch)
+    for filters in (
+        {"user_id": "u1", "metadata": {"user_id": "other"}},
+        {"metadata": {"user_id": "other"}, "user_id": "u1"},
+    ):
+        response = client.post("/v3/memories/search/", json={"query": "local", "filters": filters})
+        assert response.status_code == 400
+
+
+def test_v1_entities_reads_real_qdrant_scroll_results(monkeypatch):
+    from routers import entities
+
+    store = make_qdrant_store()
+    try:
+        client, _ = make_client(monkeypatch)
+        monkeypatch.setattr(entities, "get_memory_instance", lambda: SimpleNamespace(vector_store=store))
+        response = client.get("/v1/entities/")
+        assert response.status_code == 200
+        assert {
+            (row["type"], row["id"]): row["total_memories"] for row in response.json()
+        } == {("agent", "proj"): 2, ("app", "proj"): 4, ("user", "u1"): 1, ("user", "other"): 1}
+    finally:
+        store.client.close()
+
+
+def test_v1_app_scoped_delete_rejects_capped_results_without_deleting(monkeypatch):
+    class CappedMemory(FakeMemory):
+        def get_all(self, **params):
+            return {"results": [{"id": f"mem-{index}"} for index in range(1000)]}
+
+    client, fake = make_client(monkeypatch, CappedMemory())
+    response = client.delete("/v1/memories/?app_id=proj")
+
+    assert response.status_code == 409
+    assert "Narrow the scope and retry" in response.json()["detail"]
+    assert fake.deleted == []
 
 
 def test_v1_aliases_get_update_delete(monkeypatch):
@@ -146,6 +285,17 @@ def test_v1_aliases_get_update_delete(monkeypatch):
     assert client.delete("/v1/memories/mem-1/?source=CLI").status_code == 200
     assert fake.updated[0] == {"memory_id": "mem-1", "text": "updated"}
     assert fake.deleted == ["mem-1"]
+
+
+def test_v1_get_returns_404_for_missing_memory(monkeypatch):
+    class MissingMemory(FakeMemory):
+        def get(self, memory_id):
+            return None
+
+    client, _ = make_client(monkeypatch, MissingMemory())
+    response = client.get("/v1/memories/missing/")
+
+    assert response.status_code == 404
 
 
 def test_mcp_initialize_tools_and_unknown_tool(monkeypatch):
