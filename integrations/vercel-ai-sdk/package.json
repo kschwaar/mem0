@@ -31,6 +31,7 @@
   "author": "Saket Aryan <saketaryan2002@gmail.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
     "@ai-sdk/anthropic": "^3.0.82",
     "@ai-sdk/cohere": "^3.0.36",
     "@ai-sdk/google": "^3.0.80",

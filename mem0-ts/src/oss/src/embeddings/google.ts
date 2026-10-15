@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { GoogleGenAI } from "@google/genai";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -13,6 +14,8 @@ export class GoogleEmbedder implements Embedder {
     this.apiKey = config.apiKey || process.env.GOOGLE_API_KEY;
     this.model = config.model || "gemini-embedding-001";
     this.embeddingDims = config.embeddingDims;
+
+    traceRuntimeObject(this, "google");
   }
 
   private async ensureClient(): Promise<void> {

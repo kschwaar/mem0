@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { OpenAILLM } from "./openai";
 import { LLMConfig, Message } from "../types";
 import { LLMResponse } from "./base";
@@ -24,6 +25,8 @@ export class XAILLM extends OpenAILLM {
         config.baseURL || process.env.XAI_API_BASE || "https://api.x.ai/v1",
       model: config.model || "grok-4.3",
     });
+
+    traceRuntimeObject(this, "xai");
   }
 
   async generateResponse(

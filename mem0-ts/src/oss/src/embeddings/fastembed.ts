@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { FlagEmbedding } from "fastembed";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -37,6 +38,8 @@ export class FastEmbedEmbedder implements Embedder {
     } else {
       this.modelName = DEFAULT_MODEL;
     }
+
+    traceRuntimeObject(this, "fastembed");
   }
 
   private getEmbeddingModel(): Promise<FlagEmbedding> {

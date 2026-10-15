@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { Mistral } from "@mistralai/mistralai";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
@@ -14,6 +15,8 @@ export class MistralLLM implements LLM {
     }
     this.apiKey = config.apiKey;
     this.model = config.model || "mistral-tiny-latest";
+
+    traceRuntimeObject(this, "mistral");
   }
 
   private async ensureClient(): Promise<void> {

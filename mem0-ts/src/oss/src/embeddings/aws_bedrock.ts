@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
 
@@ -112,6 +113,8 @@ export class AWSBedrockEmbedder implements Embedder {
         ...(config.awsSessionToken && { sessionToken: config.awsSessionToken }),
       };
     }
+
+    traceRuntimeObject(this, "aws_bedrock");
   }
 
   private async loadSdk(): Promise<BedrockRuntimeModule> {

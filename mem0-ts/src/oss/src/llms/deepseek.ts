@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { OpenAILLM } from "./openai";
 import { LLMConfig, Message } from "../types";
 import { LLMResponse } from "./base";
@@ -17,6 +18,8 @@ export class DeepSeekLLM extends OpenAILLM {
         "https://api.deepseek.com",
       model: config.model || "deepseek-chat",
     });
+
+    traceRuntimeObject(this, "deepseek");
   }
 
   async generateResponse(

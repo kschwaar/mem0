@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { RerankerConfig } from "../types";
 import { Reranker, RerankResult } from "./base";
 
@@ -24,6 +25,8 @@ export class CrossEncoderReranker implements Reranker {
     this.maxLength = config.maxLength ?? defaultMaxLength;
     this.normalize = config.normalize ?? true;
     this.topK = config.topK;
+
+    traceRuntimeObject(this, "cross_encoder");
   }
 
   private load() {

@@ -58,3 +58,4 @@ export * from "./rerankers/llm";
 export * from "./rerankers/zeroentropy";
 export * from "./rerankers/cross_encoder";
 export * from "./utils/factory";
+export * from "./utils/runtime_tracing";

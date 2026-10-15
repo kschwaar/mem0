@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { Embeddings } from "@langchain/core/embeddings";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -25,6 +26,8 @@ export class LangchainEmbedder implements Embedder {
     this.embedderInstance = config.model as Embeddings;
     // Store batch size if the instance has it (optional)
     this.batchSize = (this.embedderInstance as any).batchSize;
+
+    traceRuntimeObject(this, "langchain");
   }
 
   async embed(text: string): Promise<number[]> {

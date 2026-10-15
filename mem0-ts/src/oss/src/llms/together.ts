@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { OpenAILLM } from "./openai";
 import { LLMConfig, Message } from "../types";
 import { LLMResponse } from "./base";
@@ -17,6 +18,8 @@ export class TogetherLLM extends OpenAILLM {
         "https://api.together.ai/v1",
       model: config.model || "MiniMaxAI/MiniMax-M3",
     });
+
+    traceRuntimeObject(this, "together");
   }
 
   async generateResponse(
