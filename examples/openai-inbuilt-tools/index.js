@@ -1,4 +1,5 @@
-import MemoryClient from "mem0ai";
+import { MemoryClient } from "mem0ai";
+import { configureRuntimeTracing, flushRuntimeTracing, shutdownRuntimeTracing, instrumentRuntimeClient } from "mem0ai/tracing";
 import { OpenAI } from "openai";
 import { zodResponsesFunction } from "openai/helpers/zod";
 import { z } from "zod";
@@ -9,16 +10,24 @@ const mem0Config = {
 };
 
 async function run() {
-    // RESPONES WITHOUT MEMORIES
-    console.log("\n\nRESPONES WITHOUT MEMORIES\n\n");
-    await main();
+    if (process.env.MEM0_RUNTIME_TRACING === "true" && process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY) {
+        try { await configureRuntimeTracing(); } catch { /* tracing setup must not block the demo */ }
+    }
+    try {
+        // RESPONES WITHOUT MEMORIES
+        console.log("\n\nRESPONES WITHOUT MEMORIES\n\n");
+        await main();
 
-    // ADDING SOME SAMPLE MEMORIES
-    await addSampleMemories();
+        // ADDING SOME SAMPLE MEMORIES
+        await addSampleMemories();
 
-    // RESPONES WITH MEMORIES
-    console.log("\n\nRESPONES WITH MEMORIES\n\n");
-    await main(true);
+        // RESPONES WITH MEMORIES
+        console.log("\n\nRESPONES WITH MEMORIES\n\n");
+        await main(true);
+    } finally {
+        await flushRuntimeTracing();
+        await shutdownRuntimeTracing();
+    }
 }
 
 // OpenAI Response Schema
@@ -36,6 +45,7 @@ const Cars = z.object({
 
 async function main(memory = false) {
   const openAIClient = new OpenAI();
+  instrumentRuntimeClient(openAIClient, "openai");
   const mem0Client = new MemoryClient(mem0Config);
 
   const input = "Suggest me some cars that I can buy today.";

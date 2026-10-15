@@ -3,8 +3,9 @@
 import { createDataStreamResponse, jsonSchema, streamText } from "ai";
 import { addMemories, getMemories } from "@mem0/vercel-ai-provider";
 import { openai } from "@ai-sdk/openai";
+import { configureRuntimeTracing, traceRuntimeObject } from "mem0ai/tracing";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 export const maxDuration = 30;
 
 const SYSTEM_HIGHLIGHT_PROMPT = `
@@ -68,13 +69,16 @@ const retrieveMemories = (memories: any) => {
 };
 
 export async function POST(req: Request) {
+  if (process.env.MEM0_RUNTIME_TRACING === "true" && process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY) {
+    try { await configureRuntimeTracing(); } catch { /* tracing setup must not block inference */ }
+  }
   const { messages, system, tools, userId } = await req.json();
 
   const memories = await getMemories(messages, { user_id: userId, rerank: true, threshold: 0.1 });
   const mem0Instructions = retrieveMemories(memories);
 
   const result = streamText({
-    model: openai("gpt-4o"),
+    model: traceRuntimeObject(openai("gpt-4o"), "openai"),
     messages,
     // forward system prompt and tools from the frontend
     system: [SYSTEM_HIGHLIGHT_PROMPT, system, mem0Instructions].filter(Boolean).join("\n"),

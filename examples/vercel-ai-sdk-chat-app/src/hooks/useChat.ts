@@ -1,3 +1,4 @@
+import { configureBrowserTracing, traceBrowserInference } from "../../../browser_tracing.js";
 import { useState } from 'react';
 import { createMem0, getMemories } from '@mem0/vercel-ai-provider';
 import { LanguageModelV1Prompt, streamText } from 'ai';
@@ -123,6 +124,11 @@ export const useChat = ({ user, mem0ApiKey, openaiApiKey, provider }: UseChatPro
     await updateMemories(messagesForPrompt as LanguageModelV1Prompt);
 
     try {
+      configureBrowserTracing({
+        enabled: import.meta.env.VITE_MEM0_RUNTIME_TRACING === "true",
+        endpoint: import.meta.env.VITE_MEM0_OTLP_ENDPOINT,
+      });
+      await traceBrowserInference({ provider, model: AI_MODELS[provider], operation: "chat" }, async () => {
       const { textStream } = await streamText({
         model: mem0(AI_MODELS[provider], {
           user_id: user,
@@ -152,6 +158,7 @@ export const useChat = ({ user, mem0ApiKey, openaiApiKey, provider }: UseChatPro
           )
         );
       }
+      });
     } catch (error) {
       console.error('Error in sendMessage:', error);
       setMessages((prev) => [...prev, ERROR_MESSAGE]);

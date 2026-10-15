@@ -12,7 +12,12 @@ import asyncio
 
 from agents import Agent, Runner
 
-from mem0 import MemoryClient
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
+
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 client = MemoryClient()
 
@@ -48,7 +53,7 @@ Here are past memories from previous sessions:
 Now respond to the user's new question or comment:
 {user_input}
 """
-    result = await Runner.run(study_agent, prompt)
+    result = await _run_study_agent(study_agent, prompt)
     response = result.final_output
 
     client.add(
@@ -58,6 +63,9 @@ Now respond to the user's new question or comment:
     )
 
     return response
+
+
+_run_study_agent = trace_call("openai_agents_runner_run", role="framework")(Runner.run)
 
 
 # Example usage
@@ -83,4 +91,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        flush_tracing()

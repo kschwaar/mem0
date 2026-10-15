@@ -3,6 +3,7 @@ import { MemoryClient, Memory as Mem0Memory } from 'mem0ai';
 import { OpenAI } from 'openai';
 import { Message, Memory } from '@/types';
 import { WELCOME_MESSAGE, INVALID_CONFIG_MESSAGE, ERROR_MESSAGE, Provider } from '@/constants/messages';
+import { configureBrowserTracing, traceBrowserInference } from '../../../browser_tracing.js';
 
 interface UseChatProps {
   user: string;
@@ -171,41 +172,46 @@ export const useChat = ({ user, mem0ApiKey, openaiApiKey }: UseChatProps): UseCh
         return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
       }
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-nano-2025-04-14",
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error
-        messages: messagesForLLM.map(msg => ({
-          role: msg.role === 'user' ? 'user' : 'assistant',
-          content: typeof msg.content === 'object' && msg.content !== null ? [msg.content] : msg.content,
-          name: generateRandomId(),
-        })),
-        stream: true,
+      let traceConfig = { enabled: false, endpoint: 'http://localhost:4318/v1/traces' };
+      try { traceConfig = { ...traceConfig, ...JSON.parse(localStorage.getItem('mem0RuntimeTracing') || '{}') }; } catch { /* Keep tracing disabled on invalid local settings. */ }
+      configureBrowserTracing(traceConfig);
+      await traceBrowserInference({ provider: 'openai', model: 'gpt-4.1-nano-2025-04-14', operation: 'chat' }, async () => {
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4.1-nano-2025-04-14",
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-expect-error
+          messages: messagesForLLM.map(msg => ({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: typeof msg.content === 'object' && msg.content !== null ? [msg.content] : msg.content,
+            name: generateRandomId(),
+          })),
+          stream: true,
+        });
+
+        const assistantMessageId = Date.now() + 1;
+        const assistantMessage: Message = {
+          id: assistantMessageId.toString(),
+          content: '',
+          sender: 'assistant',
+          timestamp: new Date().toLocaleTimeString(),
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
+
+        for await (const chunk of completion) {
+          const textPart = chunk.choices[0]?.delta?.content || '';
+          assistantMessage.content += textPart;
+          setThinking(false);
+
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId.toString()
+                ? { ...msg, content: assistantMessage.content }
+                : msg
+            )
+          );
+        }
       });
-
-      const assistantMessageId = Date.now() + 1;
-      const assistantMessage: Message = {
-        id: assistantMessageId.toString(),
-        content: '',
-        sender: 'assistant',
-        timestamp: new Date().toLocaleTimeString(),
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-
-      for await (const chunk of completion) {
-        const textPart = chunk.choices[0]?.delta?.content || '';
-        assistantMessage.content += textPart;
-        setThinking(false);
-
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId.toString()
-              ? { ...msg, content: assistantMessage.content }
-              : msg
-          )
-        );
-      }
     } catch (error) {
       console.error('Error in sendMessage:', error);
       setMessages((prev) => [...prev, ERROR_MESSAGE]);

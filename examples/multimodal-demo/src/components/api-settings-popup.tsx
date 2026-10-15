@@ -11,15 +11,25 @@ export default function ApiSettingsPopup(props: { isOpen: boolean, setIsOpen: Di
   const [mem0ApiKey, setMem0ApiKey] = useState('')
   const [providerApiKey, setProviderApiKey] = useState('')
   const [provider, setProvider] = useState('OpenAI')
+  const [tracingEnabled, setTracingEnabled] = useState(false)
+  const [tracingEndpoint, setTracingEndpoint] = useState('http://localhost:4318/v1/traces')
   const { selectorHandler, selectedOpenAIKey, selectedMem0Key, selectedProvider } = useContext(GlobalContext);
 
   const handleSave = () => {
     // Here you would typically save the settings to your backend or local storage
     selectorHandler(mem0ApiKey, providerApiKey, provider as Provider);
+    localStorage.setItem('mem0RuntimeTracing', JSON.stringify({ enabled: tracingEnabled, endpoint: tracingEndpoint }));
     setIsOpen(false)
   }
 
   useEffect(() => {
+    try {
+      const tracing = JSON.parse(localStorage.getItem('mem0RuntimeTracing') || '{}');
+      setTracingEnabled(tracing.enabled === true);
+      if (typeof tracing.endpoint === 'string') setTracingEndpoint(tracing.endpoint);
+    } catch {
+      setTracingEnabled(false);
+    }
     if (selectedOpenAIKey) {
       setProviderApiKey(selectedOpenAIKey);
     }
@@ -51,6 +61,12 @@ export default function ApiSettingsPopup(props: { isOpen: boolean, setIsOpen: Di
                 onChange={(e) => setMem0ApiKey(e.target.value)}
                 className="col-span-3 rounded-3xl"
               />
+            </div>
+            <div className="rounded-xl border p-3">
+              <Label htmlFor="runtime-tracing-enabled">Export metadata-only AI traces</Label>
+              <input id="runtime-tracing-enabled" type="checkbox" className="ml-3" checked={tracingEnabled} onChange={(event) => setTracingEnabled(event.target.checked)} />
+              <Input id="runtime-tracing-endpoint" aria-label="Local OTLP traces endpoint" value={tracingEndpoint} onChange={(event) => setTracingEndpoint(event.target.value)} className="mt-2 rounded-3xl" />
+              <p className="mt-1 text-xs">Loopback OTLP collector only. Defaults to http://localhost:4318/v1/traces.</p>
             </div>
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="provider-api-key" className="text-right">

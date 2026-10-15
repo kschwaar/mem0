@@ -10,7 +10,12 @@ export MEM0_API_KEY="your_mem0_api_key"
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 
-from mem0 import MemoryClient
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
+
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 # Initialize memory
 memory_client = MemoryClient(api_key="your-mem0-api-key")
@@ -44,9 +49,12 @@ Here is what you remember about {user_id}:
 
 User query:
 {user_input}"""
-    response = agent.run(prompt)
+    response = _run_fitness_agent(prompt)
     memory_client.add(f"User: {user_input}\nAssistant: {response.content}", user_id=user_id)
     return response.content
+
+
+_run_fitness_agent = trace_call("agno_agent_run", role="framework")(agent.run)
 
 
 # --------------------------------------------------
@@ -112,7 +120,10 @@ messages = [
 store_user_preferences(messages)
 
 # Example usage with fitness coach
-fitness_coach("How much was I lifting for bench press a month ago?")
+try:
+    fitness_coach("How much was I lifting for bench press a month ago?")
 # OUTPUT: A month ago, you were lifting 55kg for your bench press as part of your push day routine. It looks like you've increased your bench press weight by 5kg since then! Keep up the good work on your journey to gain lean muscle.
-fitness_coach("Suggest a post-workout meal, but I’ve had poor sleep last night.")
+    fitness_coach("Suggest a post-workout meal, but I’ve had poor sleep last night.")
+finally:
+    flush_tracing()
 # OUTPUT: Anish, since you had poor sleep, focus on a recovery-friendly, lactose-free meal: tofu or chicken for protein, paired with quinoa or brown rice for lasting energy. Turmeric almond milk will help with inflammation. Based on your past leg day recovery, continue magnesium, stay well-hydrated, and avoid caffeine after 4PM. Aim for 7–8 hours of sleep, and consider light stretching or a warm bath to ease soreness.

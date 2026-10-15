@@ -1,4 +1,5 @@
 // Background script to handle API calls to OpenAI and manage extension state
+import { configureBrowserTracing, traceBrowserInference } from "../../browser_tracing.js";
 
 // Configuration (will be stored in sync storage eventually)
 let config = {
@@ -8,6 +9,8 @@ let config = {
   maxTokens: 2000,
   temperature: 0.7,
   enabledSites: ["youtube.com"],
+  tracingEnabled: false,
+  tracingEndpoint: "http://localhost:4318/v1/traces",
 };
 
 // Track if config is loaded
@@ -15,7 +18,7 @@ let isConfigLoaded = false;
 
 // Initialize configuration from storage
 chrome.storage.sync.get(
-  ["apiKey", "mem0ApiKey", "model", "maxTokens", "temperature", "enabledSites"],
+  ["apiKey", "mem0ApiKey", "model", "maxTokens", "temperature", "enabledSites", "tracingEnabled", "tracingEndpoint"],
   (result) => {
     if (result.apiKey) config.apiKey = result.apiKey;
     if (result.mem0ApiKey) config.mem0ApiKey = result.mem0ApiKey;
@@ -23,6 +26,8 @@ chrome.storage.sync.get(
     if (result.maxTokens) config.maxTokens = result.maxTokens;
     if (result.temperature) config.temperature = result.temperature;
     if (result.enabledSites) config.enabledSites = result.enabledSites;
+    if (result.tracingEnabled !== undefined) config.tracingEnabled = result.tracingEnabled;
+    if (result.tracingEndpoint) config.tracingEndpoint = result.tracingEndpoint;
 
     isConfigLoaded = true;
   }
@@ -55,6 +60,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             "maxTokens",
             "temperature",
             "enabledSites",
+            "tracingEnabled",
+            "tracingEndpoint",
           ],
           (result) => {
             if (result.apiKey) config.apiKey = result.apiKey;
@@ -63,6 +70,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (result.maxTokens) config.maxTokens = result.maxTokens;
             if (result.temperature) config.temperature = result.temperature;
             if (result.enabledSites) config.enabledSites = result.enabledSites;
+            if (result.tracingEnabled !== undefined) config.tracingEnabled = result.tracingEnabled;
+            if (result.tracingEndpoint) config.tracingEndpoint = result.tracingEndpoint;
             isConfigLoaded = true;
             sendResponse({ config });
           }
@@ -164,6 +173,8 @@ async function sendChatRequest(messages, model) {
   }
 
   try {
+    configureBrowserTracing({ enabled: config.tracingEnabled, endpoint: config.tracingEndpoint });
+    return await traceBrowserInference({ provider: "openai", model: model || config.model, operation: "chat" }, async () => {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -234,6 +245,7 @@ async function sendChatRequest(messages, model) {
     }
 
     return { done: true };
+    });
   } catch (error) {
     console.error("Error sending chat request:", error);
     return { error: error.message };

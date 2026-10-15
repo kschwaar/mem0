@@ -3,18 +3,24 @@ Personalized Search Agent with Mem0 + Tavily
 Uses LangChain agent pattern with Tavily tools for personalized search based on user memories stored in Mem0.
 """
 
+import logging
+from datetime import datetime
+
 from dotenv import load_dotenv
-from mem0 import MemoryClient
-from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain.schema import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
-from langchain.schema import HumanMessage
-from datetime import datetime
-import logging
+
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
 
 # Load environment variables
 load_dotenv()
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -169,7 +175,7 @@ def conduct_personalized_search(user_id, query):
         agent_executor = create_personalized_search_agent(user_context)
 
         # Run the agent
-        response = agent_executor.invoke({
+        response = _invoke_search_agent(agent_executor, {
             "messages": [HumanMessage(content=query)]
         })
 
@@ -199,6 +205,12 @@ def conduct_personalized_search(user_id, query):
     except Exception as e:
         logger.error(f"Error in personalized search workflow: {e}")
         return {"error": str(e)}
+
+
+@trace_call("langchain_agent_executor_invoke", role="framework")
+def _invoke_search_agent(agent_executor, inputs):
+    """Trace the full LangChain agent dispatch, including its internal model calls."""
+    return agent_executor.invoke(inputs)
 
 
 def store_search_interaction(user_id, original_query, agent_response):
@@ -247,4 +259,7 @@ def personalized_search_agent():
 
 
 if __name__ == "__main__":
-    personalized_search_agent()
+    try:
+        personalized_search_agent()
+    finally:
+        flush_tracing()

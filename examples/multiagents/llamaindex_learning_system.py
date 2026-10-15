@@ -21,7 +21,13 @@ from llama_index.llms.openai import OpenAI
 # Memory integration
 from llama_index.memory.mem0 import Mem0Memory
 
+from mem0 import configure_tracing, flush_tracing, trace_call
+
 load_dotenv()
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 # Configure logging
 logging.basicConfig(
@@ -156,7 +162,7 @@ class MultiAgentLearningSystem:
             request = f"I want to learn about {topic}."
 
         # The magic happens here - multi-agent memory is automatically shared!
-        response = await self.workflow.run(user_msg=request, memory=self.memory)
+        response = await _run_learning_workflow(self.workflow, request, self.memory)
 
         return str(response)
 
@@ -174,6 +180,12 @@ class MultiAgentLearningSystem:
 
         except Exception as e:
             return f"Memory retrieval error: {str(e)}"
+
+
+@trace_call("llamaindex_agent_workflow_run", role="framework")
+async def _run_learning_workflow(workflow, request, memory):
+    """Trace LlamaIndex's full async multi-agent workflow dispatch."""
+    return await workflow.run(user_msg=request, memory=memory)
 
 
 async def run_learning_agent():
@@ -205,4 +217,7 @@ if __name__ == "__main__":
     async def main():
         await run_learning_agent()
 
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        flush_tracing()

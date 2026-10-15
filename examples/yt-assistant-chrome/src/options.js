@@ -7,6 +7,8 @@ const defaultConfig = {
   maxTokens: 2000,
   temperature: 0.7,
   enabledSites: ["youtube.com"],
+  tracingEnabled: false,
+  tracingEndpoint: "http://localhost:4318/v1/traces",
 };
 
 // Initialize Mem0AI client
@@ -102,6 +104,8 @@ async function loadConfig() {
       document.getElementById("temperature-value").textContent =
         config.temperature;
     }
+    document.getElementById("tracing-enabled").checked = config.tracingEnabled === true;
+    document.getElementById("tracing-endpoint").value = config.tracingEndpoint || defaultConfig.tracingEndpoint;
   } catch (error) {
     showStatus(`Error loading configuration: ${error.message}`, "error");
   }
@@ -113,6 +117,8 @@ async function saveOptions() {
   const model = document.getElementById("model").value;
   const maxTokens = parseInt(document.getElementById("max-tokens").value);
   const temperature = parseFloat(document.getElementById("temperature").value);
+  const tracingEnabled = document.getElementById("tracing-enabled").checked;
+  const tracingEndpoint = document.getElementById("tracing-endpoint").value;
 
   // Validate inputs
   if (maxTokens < 50 || maxTokens > 4000) {
@@ -130,6 +136,8 @@ async function saveOptions() {
     model,
     maxTokens,
     temperature,
+    tracingEnabled,
+    tracingEndpoint,
   };
 
   // Show loading status

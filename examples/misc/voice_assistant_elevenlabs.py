@@ -28,13 +28,21 @@ from elevenlabs import play
 from elevenlabs.client import ElevenLabs
 from openai import OpenAI
 
-from mem0 import MemoryClient
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
 
 # ------------------ SETUP ------------------
 USER_ID = "Alex"
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 openai_client = OpenAI()
 tts_client = ElevenLabs()
 memory_client = MemoryClient()
+if tracing_runtime:
+    openai_client.audio.transcriptions.create = trace_call(
+        "openai.audio.transcriptions.create", role="audio_transcription", kind="generation"
+    )(openai_client.audio.transcriptions.create)
 
 
 # Function to store user preferences in memory
@@ -172,7 +180,7 @@ def get_agent_response(user_input):
             memory=True,
             memory_config={"provider": "mem0", "config": {"user_id": USER_ID}},
         )
-        result = crew.kickoff()
+        result = _kickoff_voice_crew(crew)
 
         # Extract the text response from the complex result object
         if hasattr(result, "raw"):
@@ -192,6 +200,12 @@ def get_agent_response(user_input):
         return "I'm having trouble processing that request. Can we try again?"
 
 
+@trace_call("crewai_crew_kickoff", role="framework")
+def _kickoff_voice_crew(crew):
+    """Trace CrewAI's full task dispatch while leaving model calls framework-owned."""
+    return crew.kickoff()
+
+
 # ------------------ SPEAK WITH ELEVENLABS ------------------
 def speak_response(text):
     print(f"🤖 Agent: {text}")
@@ -199,6 +213,12 @@ def speak_response(text):
         text=text, voice_id="JBFqnCBsd6RMkjVDRZzb", model_id="eleven_multilingual_v2", output_format="mp3_44100_128"
     )
     play(audio)
+
+
+# Cover the SDK's generated audio stream through playback, not only creation.
+speak_response = trace_call("elevenlabs.text_to_speech_and_play", role="audio_generation", kind="generation")(
+    speak_response
+)
 
 
 # ------------------ MAIN LOOP ------------------
@@ -229,3 +249,5 @@ if __name__ == "__main__":
         print("\n👋 Program interrupted. Exiting.")
     except Exception as e:
         print(f"❌ Fatal error: {e}")
+    finally:
+        flush_tracing(tracing_runtime)
