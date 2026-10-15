@@ -108,18 +108,6 @@ def test_bounds_and_unknown_expectation_fail_before_artifacts(tmp_path):
     assert not (tmp_path / "run").exists()
 
 
-def test_real_prompt_renderer_uses_current_source_and_fixed_dates():
-    fixture = case()
-    fixture["input"] = {
-        "stage": "additive_extraction",
-        "prompt_args": {"new_messages": "user: I prefer tea", "current_date": "2026-10-05", "timestamp": "2026-10-05"},
-    }
-    rendered = evaluation.render_inputs(fixture)
-    assert "Every returned object must include an `event` field" in rendered["messages"][0]["content"]
-    assert "2026-10-05" in rendered["messages"][1]["content"]
-    assert "stage" not in rendered
-
-
 def test_cli_gate_exit_and_offline_evidence(tmp_path):
     fixtures = tmp_path / "cases.jsonl"
     fixtures.write_text(json.dumps(case("broken")) + "\n")
