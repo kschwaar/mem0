@@ -1,0 +1,6 @@
+{
+  "name": "mem0-plugins",
+  "omp": {
+    "extensions": ["./adapters/omp/index.mjs"]
+  }
+}
