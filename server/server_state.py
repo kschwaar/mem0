@@ -10,6 +10,8 @@ _state_lock = threading.RLock()
 _current_config: Dict[str, Any] = {}
 _memory_instance: Memory | None = None
 _session_factory: Callable | None = None
+def _build_memory(config: Dict[str, Any]) -> Memory:
+    return Memory.from_config(config)
 
 
 def set_session_factory(factory: Callable) -> None:
@@ -80,7 +82,7 @@ def initialize_state(default_config: Dict[str, Any]) -> None:
         overrides = _load_overrides()
         if overrides:
             _current_config = _merge_config(_current_config, overrides)
-        _memory_instance = Memory.from_config(_current_config)
+        _memory_instance = _build_memory(_current_config)
 
 
 def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -88,7 +90,7 @@ def update_config(updates: Dict[str, Any]) -> Dict[str, Any]:
     with _state_lock:
         next_config = _merge_config(_current_config, updates)
         _current_config = next_config
-        _memory_instance = Memory.from_config(next_config)
+        _memory_instance = _build_memory(next_config)
         overrides = _load_overrides()
         overrides = _merge_config(overrides, updates)
         _save_overrides(overrides)

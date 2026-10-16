@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import OpenAI from "openai";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -41,6 +42,8 @@ export class HuggingFaceEmbedder implements Embedder {
     });
     // TEI ignores the model field; default mirrors the Python provider.
     this.model = config.model || "tei";
+
+    traceRuntimeObject(this, "huggingface");
   }
 
   async embed(text: string): Promise<number[]> {

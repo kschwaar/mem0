@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { RerankerConfig } from "../types";
 import { Reranker, RerankResult } from "./base";
 import { loadPeer } from "../utils/load_peer";
@@ -25,6 +26,8 @@ export class CohereReranker implements Reranker {
     this.topK = config.topK;
     this.returnDocuments = config.returnDocuments ?? false;
     this.maxChunksPerDoc = config.maxChunksPerDoc;
+
+    traceRuntimeObject(this, "cohere");
   }
 
   /**

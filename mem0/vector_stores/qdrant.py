@@ -21,6 +21,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+from mem0.runtime_tracing import trace_call
 from mem0.vector_stores.base import VectorStoreBase
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,7 @@ class Qdrant(VectorStoreBase):
                 self._bm25_encoder = False
         return self._bm25_encoder if self._bm25_encoder is not False else None
 
+    @trace_call("bm25_encode", "embedding")
     def _encode_bm25(self, text: str) -> SparseVector | None:
         """Encode text into a BM25 sparse vector."""
         encoder = self._get_bm25_encoder()

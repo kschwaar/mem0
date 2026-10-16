@@ -42,6 +42,9 @@ importers:
       '@ai-sdk/provider-utils':
         specifier: ^4.0.27
         version: 4.0.27(zod@3.25.76)
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.1
       ai:
         specifier: ^6.0.199
         version: 6.0.199(zod@3.25.76)

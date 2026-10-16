@@ -13,7 +13,12 @@ from agno.agent import Agent
 from agno.media import Image
 from agno.models.openai import OpenAIChat
 
-from mem0 import MemoryClient
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
+
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 # Initialize the Mem0 client
 client = MemoryClient()
@@ -66,13 +71,16 @@ User question:
 {user_input}
 """
         if image_path:
-            response = agent.run(prompt, images=[Image(filepath=Path(image_path))])
+            response = _run_personal_agent(prompt, images=[Image(filepath=Path(image_path))])
         else:
-            response = agent.run(prompt)
+            response = _run_personal_agent(prompt)
         client.add(f"User: {user_input}\nAssistant: {response.content}", user_id=user_id)
         return response.content
 
     return "No user input or image provided."
+
+
+_run_personal_agent = trace_call("agno_agent_run", role="framework")(agent.run)
 
 
 # Example Usage
@@ -91,6 +99,9 @@ print(
         user_id=user_id,
     )
 )
-print(chat_user("hey can you quickly tell me if brought my sunglasses to my trip, not able to find", user_id=user_id))
+try:
+    print(chat_user("hey can you quickly tell me if brought my sunglasses to my trip, not able to find", user_id=user_id))
+finally:
+    flush_tracing()
 # OUTPUT: Yes, you did bring your sunglasses on your trip to the Bahamas along with your laptop, face masks and other items..
 # Since you can't find them now, perhaps check the pockets of jackets you wore or in your luggage compartments.

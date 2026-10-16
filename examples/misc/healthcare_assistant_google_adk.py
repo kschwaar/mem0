@@ -6,7 +6,12 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from mem0 import MemoryClient
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
+
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -122,7 +127,8 @@ async def call_agent_async(query, runner, user_id, session_id):
     retrieve_patient_info.user_id = user_id
 
     # Run the agent
-    async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
+    events = await _run_healthcare_agent(runner, user_id, session_id, content)
+    for event in events:
         if event.is_final_response():
             if event.content and event.content.parts:
                 response = event.content.parts[0].text
@@ -130,6 +136,15 @@ async def call_agent_async(query, runner, user_id, session_id):
                 return response
 
     return "No response received."
+
+
+@trace_call("google_adk_runner_run_async", role="framework")
+async def _run_healthcare_agent(runner, user_id, session_id, content):
+    """Consume ADK's event stream within the tracing wrapper until it ends."""
+    events = []
+    async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
+        events.append(event)
+    return events
 
 
 # Example conversation flow
@@ -199,10 +214,13 @@ if __name__ == "__main__":
     parser.add_argument("--patient-id", type=str, default=USER_ID, help="Patient ID for the conversation")
     args = parser.parse_args()
 
-    if args.demo:
-        asyncio.run(run_conversation())
-    elif args.interactive:
-        asyncio.run(interactive_mode())
-    else:
+    try:
+        if args.demo:
+            asyncio.run(run_conversation())
+        elif args.interactive:
+            asyncio.run(interactive_mode())
+        else:
         # Default to demo mode if no arguments provided
-        asyncio.run(run_conversation())
+            asyncio.run(run_conversation())
+    finally:
+        flush_tracing()

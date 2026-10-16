@@ -69,4 +69,18 @@ export default defineConfig([
     external,
     define,
   },
+  {
+    entry: { index: "src/oss/src/utils/runtime_tracing.ts" },
+    outDir: "dist/tracing",
+    format: ["cjs", "esm"],
+    dts: true,
+    sourcemap: true,
+    external: [
+      ...external,
+      "@opentelemetry/api",
+      "@opentelemetry/sdk-trace-base",
+      "@opentelemetry/exporter-trace-otlp-http",
+      "@opentelemetry/context-async-hooks",
+    ],
+  },
 ]);

@@ -13,6 +13,7 @@ from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mem0.graphs.models import RelationshipCandidate
+from mem0.runtime_tracing import trace_call
 
 
 class ExtractorIdentity(BaseModel):
@@ -76,10 +77,10 @@ class LLMStructuredRelationshipBackend:
     """Adapt an initialized Mem0 LLM to the structured relationship boundary."""
 
     def __init__(self, llm: RelationshipLLM):
-        self._llm = llm
+        self._generate_response = trace_call("generate_response", "llm", "generation")(llm.generate_response)
 
     def extract(self, memory_text: str) -> Mapping[str, Any]:
-        response = self._llm.generate_response(
+        response = self._generate_response(
             messages=[
                 {"role": "system", "content": RELATIONSHIP_EXTRACTION_PROMPT},
                 {"role": "user", "content": memory_text},

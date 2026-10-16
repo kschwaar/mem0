@@ -11,7 +11,10 @@
       "hooks/hooks.json": "hooks/hooks.json",
       "adapters/claude/hook.py": "adapters/claude/hook.py",
       "adapters/claude/transcript.py": "adapters/claude/transcript.py",
-      "agents/sidekick.md": "agents/sidekick.md"
+      "agents/sidekick.md": "agents/sidekick.md",
+      "package.json": "package.json",
+      "adapters/omp/index.mjs": "adapters/omp/index.mjs",
+      "adapters/omp/hook.py": "adapters/omp/hook.py"
     }
   }
 }

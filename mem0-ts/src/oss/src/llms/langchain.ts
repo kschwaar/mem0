@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { BaseLanguageModel } from "@langchain/core/language_models/base";
 import type { BaseMessage } from "@langchain/core/messages";
 import { z } from "zod";
@@ -54,6 +55,8 @@ export class LangchainLLM implements LLM {
       (this.llmInstance as any).modelId ||
       (this.llmInstance as any).model ||
       "langchain-model";
+
+    traceRuntimeObject(this, "langchain");
   }
 
   async generateResponse(

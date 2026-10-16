@@ -7,6 +7,7 @@ __pycache__/
 # Self-hosted server local runtime state
 server/history/
 server/.env
+server/.env.pilot
 
 # C extensions
 *.so
@@ -188,7 +189,12 @@ notebooks/*.yaml
 # cache db
 *.db
 
+# Local CodeGraph index and generated state.
+/.codegraph/
+
 # local directories for testing
+# Reusable local benchmark datasets and run artifacts (not temporary).
+/artifacts/evaluation/
 eval/
 qdrant_storage/
 .crossnote

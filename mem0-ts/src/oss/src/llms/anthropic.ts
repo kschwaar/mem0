@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type Anthropic from "@anthropic-ai/sdk";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
@@ -29,6 +30,8 @@ export class AnthropicLLM implements LLM {
     this.maxTokens = config.maxTokens ?? 2000;
     this.temperature = config.temperature ?? 0.1;
     this.topP = config.topP;
+
+    traceRuntimeObject(this, "anthropic");
   }
 
   private async ensureClient(): Promise<void> {

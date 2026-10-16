@@ -1,4 +1,6 @@
-from typing import Any, Callable, List, Optional
+import copy
+import math
+from typing import Any, Callable, Dict, List, Optional
 
 from mem0.configs.llms.base import BaseLlmConfig
 
@@ -33,6 +35,9 @@ class OpenAIConfig(BaseLlmConfig):
         store: Optional[bool] = None,
         # Response monitoring callback
         response_callback: Optional[Callable[[Any, dict, dict], None]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        request_timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
     ):
         """
         Initialize OpenAI configuration.
@@ -63,6 +68,10 @@ class OpenAIConfig(BaseLlmConfig):
                 avoids leaking the field into OpenAI-compatible backends that
                 reject unknown fields (Gemini, Groq, vLLM, etc.).
             response_callback: Optional callback for monitoring LLM responses.
+            extra_body: Backend-specific JSON fields, omitted unless configured.
+                Per-call extra_body replaces these defaults rather than merging.
+            request_timeout: Positive finite SDK timeout in seconds; None retains SDK defaults.
+            max_retries: Nonnegative SDK retry count; zero disables retries, None retains SDK defaults.
         """
         # Initialize base parameters
         super().__init__(
@@ -90,3 +99,20 @@ class OpenAIConfig(BaseLlmConfig):
 
         # Response monitoring
         self.response_callback = response_callback
+
+        if extra_body is not None and not isinstance(extra_body, dict):
+            raise ValueError("extra_body must be a dictionary")
+        if request_timeout is not None and (
+            isinstance(request_timeout, bool)
+            or not isinstance(request_timeout, (int, float))
+            or not math.isfinite(request_timeout)
+            or request_timeout <= 0
+        ):
+            raise ValueError("request_timeout must be positive finite seconds")
+        if max_retries is not None and (
+            isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0
+        ):
+            raise ValueError("max_retries must be a nonnegative integer")
+        self.extra_body = copy.deepcopy(extra_body)
+        self.request_timeout = request_timeout
+        self.max_retries = max_retries

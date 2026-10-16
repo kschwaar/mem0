@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { Ollama } from "ollama";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -19,6 +20,8 @@ export class OllamaEmbedder implements Embedder {
     this.ensureModelExists().catch((err) => {
       logger.error(`Error ensuring model exists: ${err}`);
     });
+
+    traceRuntimeObject(this, "ollama");
   }
 
   private async ensureClient(): Promise<void> {

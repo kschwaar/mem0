@@ -12,7 +12,7 @@ import os
 
 from openai import OpenAI
 
-from mem0 import Memory
+from mem0 import Memory, configure_tracing, flush_tracing, trace_call
 
 # Configure Mem0 with Grok 3 and Qdrant
 config = {
@@ -37,10 +37,18 @@ config = {
 memory = Memory.from_config(config)
 
 # Initialize Grok 3 client
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 grok_client = OpenAI(
     api_key=os.getenv("XAI_API_KEY"),
     base_url="https://api.x.ai/v1",
 )
+if tracing_runtime:
+    grok_client.chat.completions.create = trace_call(
+        "openai_compatible.chat.completions.create", role="llm_sdk", kind="generation"
+    )(grok_client.chat.completions.create)
 
 
 def recommend_movie_with_memory(user_id: str, user_query: str):
@@ -68,13 +76,12 @@ def recommend_movie_with_memory(user_id: str, user_query: str):
 # Example Usage
 if __name__ == "__main__":
     user_id = "arshi"
-    recommend_movie_with_memory(user_id, "I'm looking for a movie to watch tonight. Any suggestions?")
-    # OUTPUT: You have watched Intersteller last weekend and you don't like horror movies, maybe you can watch "Purple Hearts" today.
-    recommend_movie_with_memory(
-        user_id, "Can we skip the tearjerkers? I really enjoyed Notting Hill and Crazy Rich Asians."
-    )
-    # OUTPUT: Got it — no sad endings! You might enjoy "The Proposal" or "Love, Rosie". They’re both light-hearted romcoms with happy vibes.
-    recommend_movie_with_memory(user_id, "Any light-hearted movie I can watch after work today?")
-    # OUTPUT: Since you liked Crazy Rich Asians and The Proposal, how about "The Intern" or "Isn’t It Romantic"? Both are upbeat, funny, and perfect for relaxing.
-    recommend_movie_with_memory(user_id, "I’ve already watched The Intern. Something new maybe?")
-    # OUTPUT: No problem! Try "Your Place or Mine" - romcoms that match your taste and are tear-free!
+    try:
+        recommend_movie_with_memory(user_id, "I'm looking for a movie to watch tonight. Any suggestions?")
+        recommend_movie_with_memory(
+            user_id, "Can we skip the tearjerkers? I really enjoyed Notting Hill and Crazy Rich Asians."
+        )
+        recommend_movie_with_memory(user_id, "Any light-hearted movie I can watch after work today?")
+        recommend_movie_with_memory(user_id, "I've already watched The Intern. Something new maybe?")
+    finally:
+        flush_tracing(tracing_runtime)

@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import OpenAI from "openai";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -16,6 +17,8 @@ export class LMStudioEmbedder implements Embedder {
     const apiKey = config.apiKey || DEFAULT_LMSTUDIO_API_KEY;
     this.openai = new OpenAI({ apiKey, baseURL: String(baseURL) });
     this.model = config.model || DEFAULT_MODEL;
+
+    traceRuntimeObject(this, "lmstudio");
   }
 
   async embed(text: string): Promise<number[]> {

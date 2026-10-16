@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import OpenAI from "openai";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -14,6 +15,8 @@ export class OpenAIEmbedder implements Embedder {
     });
     this.model = config.model || "text-embedding-3-small";
     this.embeddingDims = config.embeddingDims;
+
+    traceRuntimeObject(this, "openai");
   }
 
   async embed(text: string): Promise<number[]> {

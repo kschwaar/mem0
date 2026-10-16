@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { OpenAILLM } from "./openai";
 import { LLMConfig, Message } from "../types";
 import { LLMResponse } from "./base";
@@ -23,6 +24,8 @@ export class VllmLLM extends OpenAILLM {
       baseURL,
       model: config.model || DEFAULT_MODEL,
     });
+
+    traceRuntimeObject(this, "vllm");
   }
 
   async generateResponse(

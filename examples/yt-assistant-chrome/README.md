@@ -70,6 +70,12 @@ A powerful Chrome extension that combines AI chat with your personal knowledge b
 3. Ask questions about the video content
 4. The AI will respond with contextual information
 
+### Local inference tracing
+
+Tracing is disabled by default. In the extension options, enable **Export metadata-only AI traces** and keep the endpoint at `http://localhost:4318/v1/traces` (or another loopback OTLP/HTTP collector endpoint). The extension accepts loopback hosts only. Configure the local collector to forward OTLP traces to your Langfuse instance; do not put Langfuse project keys in the extension. Traces include provider, model, operation, and outcome only. Prompts, video transcripts, API keys, and response content are not exported. The collector must permit requests from the extension origin.
+
+After `npm run build`, load the extension directory as unpacked in Chrome; the build bundles the shared browser tracing helper into the service worker at `dist/background.bundle.js`.
+
 ### Example Prompts
 
 - "Can you summarize the main points of this video?"

@@ -14,7 +14,12 @@ from agno.models.openai import OpenAIChat
 from agno.tools.cartesia import CartesiaTools
 from agno.utils.audio import write_audio_to_file
 
-from mem0 import MemoryClient
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
+
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 memory_client = MemoryClient()
 USER_ID = "food_user_01"
@@ -63,7 +68,7 @@ def get_food_recommendation(user_query: str, user_id):
     """
 
     # Generate response with voice (same pattern as translator)
-    food_agent.print_response(full_request)
+    _run_food_agent(full_request)
     response = food_agent.run_response
 
     # Save audio file
@@ -79,6 +84,9 @@ def get_food_recommendation(user_query: str, user_id):
         print(f"Audio saved as {filename}")
 
     return response.content
+
+
+_run_food_agent = trace_call("agno_agent_print_response", role="framework")(food_agent.print_response)
 
 
 def initialize_food_memory(user_id):
@@ -117,11 +125,14 @@ def initialize_food_memory(user_id):
 # Initialize the memory for the user once in order for the agent to learn the user preference
 initialize_food_memory(user_id=USER_ID)
 
-print(
-    get_food_recommendation(
+try:
+    print(
+        get_food_recommendation(
         "Which type of restaurants should I go tonight for dinner and cuisines preferred?", user_id=USER_ID
+        )
     )
-)
+finally:
+    flush_tracing()
 # OUTPUT: 🎵 Audio saved as food_recommendation_1750162610.mp3
 # For dinner tonight, considering your love for healthy spic optionsy, you could try a nice Thai, Indian, or Mexican restaurant.
 # You might find dishes with quinoa, chickpeas, tofu, and fresh herbs delightful. Enjoy your dinner!

@@ -1,3 +1,5 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
+
 export interface RerankResult {
   /** Index into the input `documents` array. */
   index: number;
@@ -18,4 +20,11 @@ export interface Reranker {
     documents: string[],
     topK?: number,
   ): Promise<RerankResult[]>;
+}
+/** Add inference spans while preventing query and document content export. */
+export function traceRerankerProvider<T extends Reranker>(
+  provider: T,
+  name: string,
+): T {
+  return traceRuntimeObject(provider, name);
 }

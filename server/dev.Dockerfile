@@ -9,6 +9,9 @@ ENV PATH="/root/.local/bin:$PATH"
 # Copy requirements first for better caching
 COPY server/requirements.txt .
 RUN pip install -r requirements.txt
+# Optional trace exporter; tracing stays disabled unless explicitly configured.
+COPY server/requirements-tracing.txt /tmp/requirements-tracing.txt
+RUN pip install -r /tmp/requirements-tracing.txt
 
 # Install mem0 in editable mode using Poetry
 WORKDIR /app/packages

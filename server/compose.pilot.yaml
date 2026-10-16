@@ -1,0 +1,216 @@
+name: mem0-coding-pilot
+
+services:
+  mem0:
+    image: ${MEM0_PILOT_IMAGE:-fixture-cpu-build-only-mem0@sha256:53c6ae836fc6b45bc80779a034082ab23fe728832735f27a614dd7e7f842ffab}
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8899:8000"
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MEM0_PILOT_POSTGRES_PASSWORD:?Set MEM0_PILOT_POSTGRES_PASSWORD in server/.env.pilot}
+      APP_DB_NAME: mem0_app
+      ADMIN_API_KEY: ${MEM0_PILOT_API_KEY:?Set MEM0_PILOT_API_KEY in server/.env.pilot}
+      JWT_SECRET: ${MEM0_PILOT_JWT_SECRET:?Set MEM0_PILOT_JWT_SECRET in server/.env.pilot}
+      AUTH_DISABLED: "false"
+      MEM0_TELEMETRY: "false"
+      OPENAI_API_KEY: ${OMLX_API_KEY:?Set OMLX_API_KEY in server/.env.pilot}
+      OPENAI_BASE_URL: http://host.docker.internal:8080/v1
+      MEM0_DEFAULT_LLM_MODEL: Ministral-3-8B-Instruct-2512-4bit
+      MEM0_DEFAULT_EMBEDDER_MODEL: Qwen3-Embedding-0.6B-4bit-DWQ
+      MEM0_EMBEDDING_DIMS: "1024"
+      MEM0_VECTOR_STORE_PROVIDER: qdrant
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      QDRANT_COLLECTION_NAME: pilot_memories
+      MEM0_GRAPH_STORE_PROVIDER: ""
+      MEM0_RERANKER_PROVIDER: ""
+      HISTORY_DB_PATH: /pilot-history/history.db
+      MEM0_LLM_TEMPERATURE: "0"
+      MEM0_LLM_TOP_P: "1"
+      MEM0_LLM_MAX_TOKENS: "2048"
+      MEM0_LLM_REQUEST_TIMEOUT: "120"
+      MEM0_LLM_MAX_RETRIES: "0"
+      MEM0_LLM_EXTRA_BODY_JSON: >-
+        {
+          "chat_template_kwargs": {"enable_thinking": false},
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "memory_extraction",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "memory": {
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "text": {"type": "string", "pattern": ".*\\S.*"},
+                            "event": {"const": "ADD"},
+                            "old_memory": {"type": "string"},
+                            "attributed_to": {"type": "string"},
+                            "linked_memory_ids": {"type": "array", "items": {"type": "string"}}
+                          },
+                          "required": ["id", "text", "event"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "text": {"type": "string", "pattern": ".*\\S.*"},
+                            "event": {"const": "UPDATE"},
+                            "old_memory": {"type": "string"},
+                            "attributed_to": {"type": "string"},
+                            "linked_memory_ids": {"type": "array", "items": {"type": "string"}}
+                          },
+                          "required": ["id", "text", "event"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "text": {"type": "string"},
+                            "event": {"const": "DELETE"},
+                            "old_memory": {"type": "string"},
+                            "attributed_to": {"type": "string"},
+                            "linked_memory_ids": {"type": "array", "items": {"type": "string"}}
+                          },
+                          "required": ["id", "event"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "text": {"type": "string"},
+                            "event": {"const": "NONE"},
+                            "old_memory": {"type": "string"},
+                            "attributed_to": {"type": "string"},
+                            "linked_memory_ids": {"type": "array", "items": {"type": "string"}}
+                          },
+                          "required": ["event"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": ["memory"],
+                "additionalProperties": false
+              },
+              "strict": true
+            }
+          }
+        }
+      MEM0_RUNTIME_TRACING: "true"
+      LANGFUSE_BASE_URL: http://host.docker.internal:4000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?Set LANGFUSE_PUBLIC_KEY in server/.env.pilot}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?Set LANGFUSE_SECRET_KEY in server/.env.pilot}
+      FASTEMBED_CACHE_PATH: /pilot-assets/fastembed-cache
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - history:/pilot-history
+      - type: bind
+        source: ../mem0
+        target: /usr/local/lib/python3.12/site-packages/mem0
+        read_only: true
+      - type: bind
+        source: ./main.py
+        target: /app/main.py
+        read_only: true
+      - type: bind
+        source: ./server_state.py
+        target: /app/server_state.py
+        read_only: true
+      - type: bind
+        source: ./runtime_tracing.py
+        target: /app/runtime_tracing.py
+        read_only: true
+      - type: bind
+        source: ./errors.py
+        target: /app/errors.py
+        read_only: true
+      - type: bind
+        source: ./routers/platform_compat.py
+        target: /app/routers/platform_compat.py
+        read_only: true
+      - type: bind
+        source: ./compat.py
+        target: /app/compat.py
+        read_only: true
+      - type: bind
+        source: ./routers/entities.py
+        target: /app/routers/entities.py
+        read_only: true
+      - type: bind
+        source: ${MEM0_PILOT_FASTEMBED_CACHE:?Set absolute MEM0_PILOT_FASTEMBED_CACHE in server/.env.pilot}
+        target: /pilot-assets/fastembed-cache
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    command: ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/configure', headers={'X-API-Key': os.environ['ADMIN_API_KEY']}); urllib.request.urlopen(r, timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 1g
+    cpus: 1.0
+
+  postgres:
+    image: postgres@sha256:ae69c452f483507a6b99fb654cf93aad7fe156ffd2c56247707eef4e36d3c12b
+    pull_policy: never
+    restart: unless-stopped
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${MEM0_PILOT_POSTGRES_PASSWORD:?Set MEM0_PILOT_POSTGRES_PASSWORD in server/.env.pilot}
+    volumes:
+      - app_db:/var/lib/postgresql/data
+      - type: bind
+        source: ./init-db.sh
+        target: /docker-entrypoint-initdb.d/init-db.sh
+        read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -d postgres -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    mem_limit: 256m
+    cpus: 0.5
+
+  qdrant:
+    image: qdrant/qdrant@sha256:12364fe851b9f17356fc88189fc06d1b521262e04659ec7345975b00c9246a10
+    pull_policy: never
+    restart: unless-stopped
+    volumes:
+      - memories:/qdrant/storage
+    mem_limit: 512m
+    cpus: 0.5
+
+volumes:
+  history:
+  app_db:
+  memories:

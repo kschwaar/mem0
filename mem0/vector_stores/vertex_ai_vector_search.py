@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - fallback for older LangChain versions
 from mem0.configs.vector_stores.vertex_ai_vector_search import (
     GoogleMatchingEngineConfig,
 )
+from mem0.runtime_tracing import trace_call
 from mem0.vector_stores.base import VectorStoreBase
 
 # Configure logging
@@ -101,6 +102,14 @@ class GoogleMatchingEngine(VectorStoreBase):
         except Exception as e:
             logger.error("Failed to initialize Matching Engine components: %s", str(e))
             raise ValueError(f"Invalid configuration: {str(e)}")
+
+    @trace_call("embed_query", "embedding")
+    def _embed_query(self, text):
+        return self.embedder.embed_query(text)
+
+    @trace_call("embed_documents", "embedding")
+    def _embed_documents(self, texts):
+        return self.embedder.embed_documents(texts)
 
     def _parse_output(self, data: Dict) -> List[OutputData]:
         """
@@ -529,7 +538,7 @@ class GoogleMatchingEngine(VectorStoreBase):
             }
 
             # Get the embedding
-            vector = self.embedder.embed_query(text)
+            vector = self._embed_query(text)
 
             # Insert using the insert method
             self.insert(vectors=[vector], payloads=[payload], ids=[vector_id])
@@ -580,7 +589,7 @@ class GoogleMatchingEngine(VectorStoreBase):
 
         try:
             # Get embeddings
-            embeddings = self.embedder.embed_documents(texts)
+            embeddings = self._embed_documents(texts)
 
             # Add to store
             self.insert(vectors=embeddings, payloads=metadatas if metadatas else [{}] * len(texts), ids=ids)
@@ -618,7 +627,7 @@ class GoogleMatchingEngine(VectorStoreBase):
         logger.debug("k: %d", k)
         logger.debug("Filter: %s", filter)
 
-        embedding = self.embedder.embed_query(query)
+        embedding = self._embed_query(query)
         results = self.search(query=query, vectors=embedding, top_k=k, filters=filter)
 
         docs_and_scores = [

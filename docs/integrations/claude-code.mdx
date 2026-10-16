@@ -36,6 +36,20 @@ claude plugin update mem0@mem0-plugins --scope user  # update the plugin (restar
 claude plugin uninstall mem0@mem0-plugins      # uninstall the plugin (keeps the marketplace)
 ```
 
+### Downstream OMP source adapter
+
+For OMP development in this fork's Mem0 checkout, the same bundle also exports an OMP-native extension. Add it to the checkout's `.omp/config.yml`:
+
+```yaml
+extensions:
+  - ./integrations/claude-code-plugin
+```
+
+Start a new OMP session with Python 3.10+ available, the pilot API key, and `MEM0_API_URL` pointing at the intended server. The adapter can use the checkout's `.venv/bin/python`; `MEM0_PLUGIN_PYTHON` explicitly selects another supported interpreter. Lifecycle, skills, and MCP must share the same `MEM0_CODE_DATA_DIR` / `CLAUDE_PLUGIN_DATA` directory.
+
+Use OMP's `/skill:<name>` commands rather than assuming Claude's `/mem0:<name>` syntax. Loading the MCP server alone enables search, not automatic capture. This source adapter does not update an already installed marketplace cache; do not load an installed OMP adapter and the source copy simultaneously.
+
+
 ## What you can do
 
 ### Automatic memory

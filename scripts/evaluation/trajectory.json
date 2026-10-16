@@ -1,0 +1,11 @@
+[
+  {"id":"initial-preference","action":"add","user":"alice","text":"My preferred drink is coffee."},
+  {"id":"initial-recall","action":"search","user":"alice","query":"What drink does Alice prefer?","expect":{"contains":["coffee"]}},
+  {"id":"other-user","action":"add","user":"bob","text":"My preferred drink is cocoa."},
+  {"id":"correction","action":"add","user":"alice","text":"Correction: I no longer prefer coffee. My preferred drink is now tea. Replace my old drink preference."},
+  {"id":"corrected-state","action":"get_all","user":"alice","expect":{"contains":["tea"],"excludes":["coffee","cocoa"]}},
+  {"id":"unseen-user","action":"search","user":"charlie","query":"What is my preferred drink?","expect":{"empty":true}},
+  {"id":"reload","action":"reload"},
+  {"id":"restart-recall","action":"search","user":"alice","query":"What is my current preferred drink?","expect":{"contains":["tea"],"excludes":["coffee","cocoa"]}},
+  {"id":"other-user-preserved","action":"get_all","user":"bob","expect":{"contains":["cocoa"],"excludes":["tea","coffee"]}}
+]

@@ -21,6 +21,15 @@ The Mem0 REST API server exposes every OSS memory operation over HTTP. Run it al
   **OSS vs Platform API paths:** The self-hosted OSS server does **not** use the `/v1/` prefix. For example, the endpoint is `POST /memories`, not `POST /v1/memories/`. The [API Reference](/api-reference) documents the hosted platform at `api.mem0.ai` which uses `/v1/` paths: those do not apply to the OSS server.
 </Warning>
 
+### Downstream coding-memory pilot
+
+This fork's localhost pilot adds a platform-compatible subset alongside the native OSS routes. The coding plugin uses `POST /v3/memories/add/`, `POST /v3/memories/search/`, and `POST /v2/memories/` for scoped forget enumeration. The standalone CLI lists through `POST /v3/memories/` and gets, updates, and deletes through `/v1/memories/{memory_id}/`. The two list versions share the same authenticated handler; these routes do not imply full hosted-platform API compatibility.
+
+For the pilot, set `MEM0_API_URL=http://127.0.0.1:8899` for the plugin and `MEM0_BASE_URL=http://127.0.0.1:8899` for the standalone CLI. Both require the pilot's `MEM0_API_KEY`; the compatibility routes accept `Authorization: Token`. Keep credentials in protected local configuration, not source files.
+
+The pilot health check uses authenticated `GET /configure`. It does not provide `/health`, and its Compose entrypoint does not deploy the dashboard. Dashboard setup, API-key administration, and browser login require separate verification.
+
+
 <Warning>
   Enable API key authentication (see below) and HTTPS before exposing the server to anything beyond your internal network.
 </Warning>
@@ -269,9 +278,12 @@ The OSS REST server exposes the following endpoints. None use the `/v1/` prefix.
 | `PUT` | `/memories/{memory_id}` | Update a memory |
 | `DELETE` | `/memories/{memory_id}` | Delete a specific memory |
 | `DELETE` | `/memories` | Delete all memories for an identifier |
+
 | `GET` | `/memories/{memory_id}/history` | Get memory history |
 | `POST` | `/search` | Search memories |
 | `POST` | `/reset` | Reset all memories |
+
+For the downstream platform-compatible `DELETE /v1/memories/` route, app-scoped deletion first enumerates matching memories up to a safety limit of 1,000. If enumeration reaches that cap (including exactly 1,000 results), the request returns HTTP 409 without deleting any memories; narrow the scope and retry. Deletions below the cap complete normally.
 
 ### Authentication
 

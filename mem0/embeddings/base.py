@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Literal, Optional
 
 from mem0.configs.embeddings.base import BaseEmbedderConfig
+from mem0.runtime_tracing import trace_call
 
 
 class EmbeddingBase(ABC):
@@ -10,6 +11,13 @@ class EmbeddingBase(ABC):
     :param config: Embedding configuration option class, defaults to None
     :type config: Optional[BaseEmbedderConfig], optional
     """
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for method_name in ("embed", "embed_batch"):
+            method = cls.__dict__.get(method_name)
+            if method is not None:
+                setattr(cls, method_name, trace_call(method_name, "embedding", "embedding")(method))
 
     def __init__(self, config: Optional[BaseEmbedderConfig] = None):
         if config is None:
@@ -30,6 +38,7 @@ class EmbeddingBase(ABC):
         """
         pass
 
+    @trace_call("embed_batch", "embedding", "span")
     def embed_batch(self, texts, memory_action="add"):
         """Embed multiple texts. Override in subclasses for native batch support.
 

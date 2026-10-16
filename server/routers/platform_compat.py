@@ -19,9 +19,10 @@ from compat import (
 from errors import upstream_error
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
-from mem0.exceptions import ValidationError as Mem0ValidationError
 from pydantic import BaseModel, Field
 from schemas import MessageResponse
+
+from mem0.exceptions import ValidationError as Mem0ValidationError
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -114,8 +115,14 @@ def _delete_by_filters(filters: Dict[str, Any]) -> int:
     if not any(key in query_filters for key in ("user_id", "agent_id", "run_id", "AND", "OR")):
         query_filters["user_id"] = entity_filters.get("user_id", "*")
     listed = memory.get_all(filters=query_filters, top_k=ALL_MEMORIES_LIMIT, show_expired=True)
+    items = flatten_memory_response(listed)
+    if len(items) >= ALL_MEMORIES_LIMIT:
+        raise HTTPException(
+            status_code=409,
+            detail=f"App-scoped delete matches at least {ALL_MEMORIES_LIMIT} memories, exceeding the safe enumeration limit. Narrow the scope and retry.",
+        )
     deleted = 0
-    for item in flatten_memory_response(listed):
+    for item in items:
         memory_id = item.get("id")
         if memory_id:
             memory.delete(memory_id=memory_id)
@@ -189,6 +196,7 @@ def search_memories(req: PlatformMemorySearch, _auth=Depends(verify_auth)):
         raise upstream_error()
 
 
+@router.post("/v2/memories/")
 @router.post("/v3/memories/")
 def list_memories(
     req: PlatformMemoryList,
@@ -198,10 +206,16 @@ def list_memories(
 ):
     filters = normalize_platform_filters(normalize_filters(req.filters))
     try:
-        response = _memory().get_all(
-            filters=filters, top_k=min(page * page_size, ALL_MEMORIES_LIMIT), show_expired=True
-        )
+        response = _memory().get_all(filters=filters, top_k=page * page_size, show_expired=True)
         results = flatten_memory_response(response)
+        results = [
+            {**item, "app_id": item["metadata"]["app_id"]}
+            if item.get("app_id") is None
+            and isinstance(item.get("metadata"), dict)
+            and item["metadata"].get("app_id") is not None
+            else item
+            for item in results
+        ]
         start = (page - 1) * page_size
         end = start + page_size
         return {"results": results[start:end], "count": len(results), "page": page, "page_size": page_size}
@@ -214,9 +228,14 @@ def list_memories(
 @router.get("/v1/memories/{memory_id}/")
 def get_memory(memory_id: str, _auth=Depends(verify_auth)):
     try:
-        return _memory().get(memory_id)
+        result = _memory().get(memory_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Memory with id {memory_id} not found")
+        return result
     except (ValueError, Mem0ValidationError) as e:
         raise _client_error(e)
+    except HTTPException:
+        raise
     except Exception:
         raise upstream_error()
 

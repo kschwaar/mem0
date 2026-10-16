@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { AzureOpenAI } from "openai";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
@@ -19,6 +20,8 @@ export class AzureOpenAILLM implements LLM {
       ...rest,
     });
     this.model = config.model || "gpt-5-mini";
+
+    traceRuntimeObject(this, "azure");
   }
 
   async generateResponse(

@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { OpenAILLM } from "./openai";
 import { LLMConfig, Message } from "../types";
 import { LLMResponse } from "./base";
@@ -17,6 +18,8 @@ export class MiniMaxLLM extends OpenAILLM {
         "https://api.minimax.io/v1",
       model: config.model || "MiniMax-M2.7",
     });
+
+    traceRuntimeObject(this, "minimax");
   }
 
   async generateResponse(

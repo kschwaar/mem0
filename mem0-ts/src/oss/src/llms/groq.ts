@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { Groq } from "groq-sdk";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
@@ -15,6 +16,8 @@ export class GroqLLM implements LLM {
     }
     this.apiKey = apiKey;
     this.model = config.model || "llama3-70b-8192";
+
+    traceRuntimeObject(this, "groq");
   }
 
   private async ensureClient(): Promise<void> {

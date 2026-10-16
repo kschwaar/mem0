@@ -41,6 +41,36 @@ python3 integrations/agent-plugin-core/build/build.py claude-code --kind native 
 claude --plugin-dir integrations/claude-code-plugin
 ```
 
+### OMP
+
+The same installable `mem0` bundle includes a native OMP extension entry point (`package.json` → `omp.extensions`). Install or link this bundle through OMP's plugin discovery, then restart OMP. Its lifecycle adapter captures prompts, tool outcomes, and the final visible assistant response; it recalls on the first prompt, and hands off pending memory at compaction or shutdown. Claude Code command hooks are not used by OMP.
+
+For this pilot checkout, `.omp/config.yml` loads the bundle automatically; no `--extension` flag is needed. Start a **new** session from the repository root with a supported Python on `PATH` and the shared controls environment (fish):
+
+```fish
+source .venv/bin/activate.fish
+set -gx MEM0_API_URL http://127.0.0.1:8899
+set -gx MEM0_BASE_URL $MEM0_API_URL
+set -gx CLAUDE_PLUGIN_ROOT (pwd)/integrations/claude-code-plugin
+set -gx CLAUDE_PLUGIN_DATA "$HOME/.mem0/claude-code-plugin"
+set -gx MEM0_CODE_DATA_DIR $CLAUDE_PLUGIN_DATA
+omp
+```
+
+The existing `MEM0_API_KEY` must be available to the harness and MCP subprocess. Do not put a key in the tracked config. An equivalent explicit load for another checkout is `omp --extension /absolute/path/to/integrations/claude-code-plugin`. Do not load both a development copy and an updated installed copy of the native adapter; remove the development override when switching to a published bundle.
+
+OMP discovers the generated `search`, `status`, `pause`, `resume`, `remember`, and `forget` skills with this package. Use `skill://<name>` or `/skill:<name>`; the `/mem0:<name>` examples below are Claude Code commands. `remember`, `pause`, `resume`, and `forget` are intentionally hidden from automatic model invocation but remain explicitly invocable. `remember` acknowledges a fact; only a successful lifecycle flush establishes that it was saved.
+
+The package intentionally shares capture state across Claude Code and OMP. For OMP command-line controls, use Python 3.10+ and point the CLI at the same bundle directory:
+
+```fish
+set -gx MEM0_CODE_DATA_DIR "$HOME/.mem0/claude-code-plugin"
+python3 integrations/claude-code-plugin/core/memory_cli.py --harness omp --plugin-data-dir "$MEM0_CODE_DATA_DIR" status --json
+python3 integrations/claude-code-plugin/core/memory_cli.py --harness omp --plugin-data-dir "$MEM0_CODE_DATA_DIR" pause
+```
+
+If the bundle is installed elsewhere or another adapter data directory is configured, set `MEM0_CODE_DATA_DIR` to that existing directory instead. OMP honors `MEM0_PLUGIN_PYTHON`; otherwise it selects a compatible project `.venv/bin/python` or Python 3.10+ on `PATH`. It does not install Python or use an unsupported interpreter.
+
 ## How it works
 
 ### Memory
@@ -97,6 +127,8 @@ By default the worktree branches from the repo's default branch. Set `worktree.b
 
 Categories for `--category`: `project_knowledge`, `decisions_and_constraints`, `workflows`, `problems_and_fixes`, `results`.
 
+Remote forget enumerates at most 50 pages of 100 memories before deleting any. If every page is full, it reports an error instead of silently deleting an incomplete list; even an exactly-5,000 result set cannot prove exhaustion within that bound. Other repositories and shared project memory remain excluded unless explicitly selected.
+
 ## Search scope
 
 | Scope | What you get |
@@ -105,7 +137,7 @@ Categories for `--category`: `project_knowledge`, `decisions_and_constraints`, `
 | `dir` | Project memory from the current directory (and children), plus your preferences |
 | `mine` | Your personal preferences only |
 
-Set the default with the `search_scope` setting or `MEM0_CODE_SEARCH_SCOPE`. Search spans earlier sessions without a session ID; `run_id` remains internal metadata.
+Set the default with the `search_scope` setting or `MEM0_CODE_SEARCH_SCOPE`. Search spans earlier sessions by default. Optional `run_id` (`--run-id` in the search skill) restricts both shared and personal results to memories saved in that coding-agent session; it does not automatically filter by the session making the request.
 
 New Git repository memories use a hash of the remote identity in `agent_id`. Searches also include the previous unhashed ID under the same repository `app_id`, so shared memories remain available after upgrading. Older IDs retain their original limitation: matching owner/repository names on different Git hosts share that legacy namespace. Local folders keep their path-based namespaces.
 

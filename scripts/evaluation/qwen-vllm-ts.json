@@ -1,0 +1,38 @@
+{
+  "llm": {
+    "provider": "vllm",
+    "config": {
+      "model": "REPLACE_WITH_EXACT_SERVED_QWEN_MODEL_ID",
+      "baseURL": "http://127.0.0.1:8000/v1",
+      "apiKey": "local-placeholder",
+      "temperature": 0,
+      "maxTokens": 2048,
+      "timeout": 30000
+    }
+  },
+  "embedder": {
+    "provider": "ollama",
+    "config": {
+      "model": "REPLACE_WITH_EXACT_INSTALLED_EMBEDDING_TAG",
+      "baseURL": "http://127.0.0.1:11434",
+      "embeddingDims": 768
+    }
+  },
+  "reranker": {
+    "provider": "llm_reranker",
+    "config": {
+      "topK": 2,
+      "llm": {
+        "provider": "vllm",
+        "config": {
+          "model": "REPLACE_WITH_EXACT_SERVED_QWEN_MODEL_ID",
+          "baseURL": "http://127.0.0.1:8000/v1",
+          "apiKey": "local-placeholder",
+          "temperature": 0,
+          "maxTokens": 100,
+          "timeout": 30000
+        }
+      }
+    }
+  }
+}

@@ -39,13 +39,21 @@ Example queries:
 3. "Who works in the core packages and the SDK updates?"
 """
 
+import atexit
 import os
 
 import streamlit as st
 from strands import Agent, tool
 from strands_tools import http_request
 
+from mem0 import configure_tracing, flush_tracing, trace_call
 from mem0.memory.main import Memory
+
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
+atexit.register(flush_tracing, tracing_runtime)
 
 
 config = {
@@ -108,8 +116,10 @@ def get_assistant_response(messages):
         formatted_messages.append(formatted_message)
 
     # Send the properly formatted message list to the agent
-    result = agent(formatted_messages)
+    result = _run_strands_agent(formatted_messages)
     return result
+
+
 
 
 
@@ -314,6 +324,7 @@ def get_all_memories_tool(user_id: str = "user") -> str:
 
 # Initialize agent with tools (must be after tool definitions)
 agent = Agent(tools=[http_request, store_memory_tool, store_graph_memory_tool, search_memory_tool, search_graph_memory_tool, get_all_memories_tool])
+_run_strands_agent = trace_call("strands_agent_call", role="framework")(agent)
 
 def store_memory(messages, user_id="alice", category="conversation"):
     """

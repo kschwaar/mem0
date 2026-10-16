@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { PredictionServiceClient } from "@google-cloud/aiplatform";
 import { Embedder } from "./base";
 import { VertexAIConfig } from "../types";
@@ -91,6 +92,8 @@ export class VertexAIEmbedder implements Embedder {
         );
       }
     }
+
+    traceRuntimeObject(this, "vertexai");
   }
 
   private async initClient(): Promise<void> {

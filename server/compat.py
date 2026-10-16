@@ -61,13 +61,25 @@ def extract_entity_filters(filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def normalize_platform_filters(filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Normalize hosted Platform filters for the OSS memory payload shape."""
+    """Translate the supported hosted filter subset to OSS payload filters."""
     if not isinstance(filters, dict):
         return {}
     normalized: Dict[str, Any] = {}
     for key, value in filters.items():
         if key in {"AND", "OR", "NOT"} and isinstance(value, list):
             normalized[key] = [normalize_platform_filters(item) if isinstance(item, dict) else item for item in value]
+        elif key == "metadata" and isinstance(value, dict):
+            for metadata_key, metadata_value in value.items():
+                payload_value = {"eq": metadata_value["contains"]} if (
+                    metadata_key == "dirs"
+                    and isinstance(metadata_value, dict)
+                    and set(metadata_value) == {"contains"}
+                ) else metadata_value
+                if metadata_key in normalized:
+                    raise HTTPException(status_code=400, detail=f"Duplicate payload filter: {metadata_key}")
+                normalized[metadata_key] = payload_value
+        elif key in normalized:
+            raise HTTPException(status_code=400, detail=f"Duplicate payload filter: {key}")
         else:
             normalized[key] = value
     return normalized
@@ -179,5 +191,6 @@ def get_event(event_id: str) -> Dict[str, Any]:
 
 def iter_rows_from_vector_store(memory: Any, limit: int) -> Iterable[Any]:
     results = memory.vector_store.list(top_k=limit)
-    rows = results[0] if results and isinstance(results, list) and isinstance(results[0], list) else results or []
-    return rows
+    if isinstance(results, (list, tuple)) and results and isinstance(results[0], (list, tuple)):
+        return results[0]
+    return results or []

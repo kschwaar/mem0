@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { OpenAIEmbedder } from "./openai";
 import { EmbeddingConfig } from "../types";
 
@@ -27,5 +28,7 @@ export class TogetherEmbedder extends OpenAIEmbedder {
         DEFAULT_BASE_URL,
       model: config.model || DEFAULT_MODEL,
     });
+
+    traceRuntimeObject(this, "together");
   }
 }

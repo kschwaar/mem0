@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { GoogleGenAI } from "@google/genai";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
@@ -11,6 +12,8 @@ export class GoogleLLM implements LLM {
   constructor(config: LLMConfig) {
     this.apiKey = config.apiKey;
     this.model = config.model || "gemini-2.0-flash";
+
+    traceRuntimeObject(this, "google");
   }
 
   private async ensureClient(): Promise<void> {

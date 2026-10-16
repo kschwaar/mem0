@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { RerankerConfig } from "../types";
 import { LLM, LLMResponse } from "../llms/base";
 import { Reranker, RerankResult } from "./base";
@@ -27,6 +28,8 @@ export class LLMReranker implements Reranker {
     }
     this.llm = llm;
     this.topK = config.topK;
+
+    traceRuntimeObject(this, "llm");
   }
 
   async rerank(

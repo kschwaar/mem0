@@ -6,6 +6,11 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Optional runtime tracing dependencies are installed for the server image;
+# tracing remains disabled unless MEM0_RUNTIME_TRACING=true.
+COPY requirements-tracing.txt /tmp/requirements-tracing.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-tracing.txt
+
 COPY . .
 
 EXPOSE 8000

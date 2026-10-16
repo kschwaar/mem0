@@ -1,7 +1,12 @@
 from agents import Agent, Runner, enable_verbose_stdout_logging, function_tool
 from dotenv import load_dotenv
 
-from mem0 import MemoryClient
+from mem0 import MemoryClient, configure_tracing, flush_tracing, trace_call
+
+try:
+    tracing_runtime = configure_tracing()
+except Exception:
+    tracing_runtime = None
 
 enable_verbose_stdout_logging()
 
@@ -71,7 +76,7 @@ def chat_with_handoffs(user_input: str, user_id: str) -> str:
         The agent's response
     """
     # Run the triage agent (it will automatically handoffs when needed)
-    result = Runner.run_sync(triage_agent, user_input)
+    result = _run_triage_agent(triage_agent, user_input)
 
     # Store the original conversation in memory
     conversation = [{"role": "user", "content": user_input}, {"role": "assistant", "content": result.final_output}]
@@ -80,6 +85,13 @@ def chat_with_handoffs(user_input: str, user_id: str) -> str:
     return result.final_output
 
 
+_run_triage_agent = trace_call("openai_agents_runner_run_sync", role="framework")(Runner.run_sync)
+
+
 # Example usage
-# response = chat_with_handoffs("Which places should I vist?", user_id="alex")
-# print(response)
+if __name__ == "__main__":
+    try:
+        response = chat_with_handoffs("Which places should I vist?", user_id="alex")
+        print(response)
+    finally:
+        flush_tracing()

@@ -1,4 +1,5 @@
 import { Message } from "../types";
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 
 export interface LLMResponse {
   content: string;
@@ -16,4 +17,9 @@ export interface LLM {
     tools?: any[],
   ): Promise<any>;
   generateChat(messages: Message[]): Promise<LLMResponse>;
+}
+
+/** Add inference spans to provider calls while preserving response and error identity. */
+export function traceLLMProvider<T extends LLM>(provider: T, name: string): T {
+  return traceRuntimeObject(provider, name);
 }

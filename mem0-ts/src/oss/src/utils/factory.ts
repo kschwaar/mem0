@@ -72,33 +72,36 @@ import { Milvus } from "../vector_stores/milvus";
 import { MongoDB } from "../vector_stores/mongodb";
 import { WeaviateDB } from "../vector_stores/weaviate";
 import { OracleAIVectorSearch } from "../vector_stores/oracledb";
+import { traceEmbedderProvider } from "../embeddings/base";
+import { traceLLMProvider } from "../llms/base";
+import { traceRerankerProvider } from "../rerankers/base";
 
 export class EmbedderFactory {
   static create(provider: string, config: EmbeddingConfig): Embedder {
     switch (provider.toLowerCase()) {
       case "openai":
-        return new OpenAIEmbedder(config);
+        return traceEmbedderProvider(new OpenAIEmbedder(config), provider);
       case "aws_bedrock":
-        return new AWSBedrockEmbedder(config);
+        return traceEmbedderProvider(new AWSBedrockEmbedder(config), provider);
       case "ollama":
-        return new OllamaEmbedder(config);
+        return traceEmbedderProvider(new OllamaEmbedder(config), provider);
       case "lmstudio":
-        return new LMStudioEmbedder(config);
+        return traceEmbedderProvider(new LMStudioEmbedder(config), provider);
       case "together":
-        return new TogetherEmbedder(config);
+        return traceEmbedderProvider(new TogetherEmbedder(config), provider);
       case "google":
       case "gemini":
-        return new GoogleEmbedder(config);
+        return traceEmbedderProvider(new GoogleEmbedder(config), provider);
       case "azure_openai":
-        return new AzureOpenAIEmbedder(config);
+        return traceEmbedderProvider(new AzureOpenAIEmbedder(config), provider);
       case "fastembed":
-        return new FastEmbedEmbedder(config);
+        return traceEmbedderProvider(new FastEmbedEmbedder(config), provider);
       case "langchain":
-        return new LangchainEmbedder(config);
+        return traceEmbedderProvider(new LangchainEmbedder(config), provider);
       case "vertexai":
-        return new VertexAIEmbedder(config);
+        return traceEmbedderProvider(new VertexAIEmbedder(config), provider);
       case "huggingface":
-        return new HuggingFaceEmbedder(config);
+        return traceEmbedderProvider(new HuggingFaceEmbedder(config), provider);
       default:
         throw new Error(`Unsupported embedder provider: ${provider}`);
     }
@@ -109,42 +112,42 @@ export class LLMFactory {
   static create(provider: string, config: LLMConfig): LLM {
     switch (provider.toLowerCase()) {
       case "openai":
-        return new OpenAILLM(config);
+        return traceLLMProvider(new OpenAILLM(config), provider);
       case "openai_structured":
-        return new OpenAIStructuredLLM(config);
+        return traceLLMProvider(new OpenAIStructuredLLM(config), provider);
       case "anthropic":
-        return new AnthropicLLM(config);
+        return traceLLMProvider(new AnthropicLLM(config), provider);
       case "groq":
-        return new GroqLLM(config);
+        return traceLLMProvider(new GroqLLM(config), provider);
       case "ollama":
-        return new OllamaLLM(config);
+        return traceLLMProvider(new OllamaLLM(config), provider);
       case "lmstudio":
-        return new LMStudioLLM(config);
+        return traceLLMProvider(new LMStudioLLM(config), provider);
       case "google":
       case "gemini":
-        return new GoogleLLM(config);
+        return traceLLMProvider(new GoogleLLM(config), provider);
       case "azure_openai":
-        return new AzureOpenAILLM(config);
+        return traceLLMProvider(new AzureOpenAILLM(config), provider);
       case "mistral":
-        return new MistralLLM(config);
+        return traceLLMProvider(new MistralLLM(config), provider);
       case "langchain":
-        return new LangchainLLM(config);
+        return traceLLMProvider(new LangchainLLM(config), provider);
       case "deepseek":
-        return new DeepSeekLLM(config);
+        return traceLLMProvider(new DeepSeekLLM(config), provider);
       case "xai":
-        return new XAILLM(config);
+        return traceLLMProvider(new XAILLM(config), provider);
       case "sarvam":
-        return new SarvamLLM(config);
+        return traceLLMProvider(new SarvamLLM(config), provider);
       case "aws_bedrock":
-        return new AWSBedrockLLM(config);
+        return traceLLMProvider(new AWSBedrockLLM(config), provider);
       case "litellm":
-        return new LiteLLM(config);
+        return traceLLMProvider(new LiteLLM(config), provider);
       case "minimax":
-        return new MiniMaxLLM(config);
+        return traceLLMProvider(new MiniMaxLLM(config), provider);
       case "together":
-        return new TogetherLLM(config);
+        return traceLLMProvider(new TogetherLLM(config), provider);
       case "vllm":
-        return new VllmLLM(config);
+        return traceLLMProvider(new VllmLLM(config), provider);
       default:
         throw new Error(`Unsupported LLM provider: ${provider}`);
     }
@@ -218,23 +221,22 @@ export class RerankerFactory {
   static create(provider: string, config: RerankerConfig): Reranker {
     switch (provider.toLowerCase()) {
       case "cohere":
-        return new CohereReranker(config);
+        return traceRerankerProvider(new CohereReranker(config), provider);
       case "zero_entropy":
-        return new ZeroEntropyReranker(config);
+        return traceRerankerProvider(new ZeroEntropyReranker(config), provider);
       case "sentence_transformer":
-        return new CrossEncoderReranker(
-          config,
-          "Xenova/ms-marco-MiniLM-L-6-v2",
+        return traceRerankerProvider(
+          new CrossEncoderReranker(config, "Xenova/ms-marco-MiniLM-L-6-v2"),
+          provider,
         );
       case "huggingface":
-        return new CrossEncoderReranker(
-          config,
-          "Xenova/bge-reranker-base",
-          512,
+        return traceRerankerProvider(
+          new CrossEncoderReranker(config, "Xenova/bge-reranker-base", 512),
+          provider,
         );
       case "llm_reranker": {
         const llm = RerankerFactory.buildLLMRerankerLLM(config);
-        return new LLMReranker(config, llm);
+        return traceRerankerProvider(new LLMReranker(config, llm), provider);
       }
       default:
         throw new Error(`Unsupported reranker provider: ${provider}`);

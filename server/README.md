@@ -168,6 +168,132 @@ The smoke test checks idempotent projection, exact-scope isolation, semantic
 candidate bounding, relationship replacement, and deletion, then removes its
 temporary graph collection.
 
+## Local Coding-Memory Pilot (Separate Compose Project)
+
+This optional, host-local pilot is separate from the standard development stack
+above and from the synthetic assessment/evaluation stack. It uses only the
+`mem0`, `postgres`, and `qdrant` services in `compose.pilot.yaml`; it does not
+start a dashboard, graph store, reranker, assessment runner, capture hook, or
+bootstrap flow. Its Compose project is `mem0-coding-pilot`, with the API bound
+only to `127.0.0.1:8899`. It does not alter the existing evaluation stack on
+port `8898`.
+
+### Prerequisites and workstation readiness
+
+- Docker Desktop with Compose v2, and the pilot's exact ARM64 CPU dependency
+  image already present locally:
+  `fixture-cpu-build-only-mem0@sha256:53c6ae836fc6b45bc80779a034082ab23fe728832735f27a614dd7e7f842ffab`.
+  Compose uses `pull_policy: never`: this fixture is not a published image and
+  the pilot does not build or download images. On another machine, provision
+  this image through an authorized local transfer/build process and verify it
+  first; do not assume a registry pull is available or substitute a different
+  image without validating it.
+- The pinned Postgres and Qdrant images must also be available locally; no
+  database/vector ports are published:
+  `postgres@sha256:ae69c452f483507a6b99fb654cf93aad7fe156ffd2c56247707eef4e36d3c12b`
+  and
+  `qdrant/qdrant@sha256:12364fe851b9f17356fc88189fc06d1b521262e04659ec7345975b00c9246a10`.
+- An absolute host directory of already-downloaded FastEmbed sparse-model
+  assets, set as `MEM0_PILOT_FASTEMBED_CACHE`. The directory is mounted
+  read-only at `/pilot-assets/fastembed-cache`; `FASTEMBED_CACHE_PATH` points
+  there and both `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` prevent model
+  downloads. The pilot has no first-run asset bootstrap.
+- The local oMLX OpenAI-compatible endpoint must be running at
+  `http://host.docker.internal:8080/v1` with the configured models available.
+  Langfuse must be reachable at `http://host.docker.internal:4000`. Neither is
+  started or stopped by this Compose project.
+
+The prepared workstation already has a private `server/.env.pilot`; preserve
+it when restarting. On a new workstation, copy `server/.env.pilot.example` to
+`server/.env.pilot` and fill in the required values: `MEM0_PILOT_API_KEY`, `MEM0_PILOT_JWT_SECRET`,
+`MEM0_PILOT_POSTGRES_PASSWORD`, `OMLX_API_KEY`, `LANGFUSE_PUBLIC_KEY`, and
+`LANGFUSE_SECRET_KEY`. The API key and JWT secret must be strong random
+secrets. Keep the private file ignored and local. Never print it, paste its
+contents into logs/chat, or expose secrets via `docker inspect` environment
+output or `docker compose config`; the Compose file fails fast when required
+interpolation values are missing (`docker compose config --quiet` is safe for
+validation).
+
+The dedicated profile pins `Ministral-3-8B-Instruct-2512-4bit` for extraction
+and `Qwen3-Embedding-0.6B-4bit-DWQ` for embeddings (1024 dimensions). Extraction
+uses temperature 0, top-p 1, 2048 max tokens, 120-second timeout, zero retries,
+disabled thinking, and the strict `memory_extraction` JSON schema. The complete
+`extra_body` schema is embedded in the Compose configuration; startup does not
+depend on the ignored assessment `freeze.json`. Langfuse tracing is enabled
+with metadata-only standard tracing; raw request/response capture is not
+enabled. Telemetry is disabled.
+
+### Start, inspect, stop, and resume
+
+Run these commands from the repository root. `up --wait` waits for healthy
+dependencies and the authenticated API health check:
+
+The health check proves API startup and authentication, not oMLX availability.
+Start oMLX separately before adding or searching memories. If port `8080` is
+not listening, those operations can return `502` even while the API is healthy.
+
+```bash
+docker compose --env-file server/.env.pilot -f server/compose.pilot.yaml \
+  up -d --wait --wait-timeout 180
+docker compose --env-file server/.env.pilot -f server/compose.pilot.yaml ps
+docker compose --env-file server/.env.pilot -f server/compose.pilot.yaml logs -f mem0
+```
+
+Stop containers without deleting data:
+
+```bash
+docker compose --env-file server/.env.pilot -f server/compose.pilot.yaml stop
+```
+
+Start again with the same `up` command. `down` also preserves named volumes;
+never use `down -v` for this pilot:
+
+```bash
+docker compose --env-file server/.env.pilot -f server/compose.pilot.yaml down
+```
+
+Persistent state is isolated in named volumes for the Mem0 history database
+(`history`, at `/pilot-history/history.db`), the server app/auth/config database
+(`app_db`), and Qdrant memories (`memories`). `server/init-db.sh` is mounted
+read-only and initializes the fresh database. On startup the service runs
+`alembic upgrade head` followed by `uvicorn main:app --host 0.0.0.0 --port
+8000` without reload. The repo's `../mem0` package is mounted read-only at
+`/usr/local/lib/python3.12/site-packages/mem0`; `main.py`, `server_state.py`,
+`runtime_tracing.py`, `errors.py`, `compat.py`, and the platform/entity routers
+are mounted read-only into their `/app` paths. The entire server directory and secrets are not
+mounted. Resource limits are 1 GiB/1 CPU for Mem0, 256 MiB/0.5 CPU for Postgres,
+and 512 MiB/0.5 CPU for Qdrant; services restart unless stopped.
+
+### Hook connection and configuration
+
+Compose does not install coding-harness hooks. The separately verified OMP
+source adapter and its setup are documented in [the interface catalog](../design/coding-memory-interfaces.md).
+For other local clients, point them at `http://127.0.0.1:8899` and pass `X-API-Key` using the private
+`MEM0_PILOT_API_KEY` value. This key is admin-capable; give it only to trusted
+local hooks. Keep stable `user_id` and project `app_id` scopes across writes
+and searches to separate retrieval contexts. These filters are not tenant
+authorization. The authenticated API
+includes `POST /memories` for add, `POST /search` for semantic search,
+`GET /memories` for scoped listing, and standard memory get/update/delete
+routes. `GET /configure` returns redacted effective configuration;
+`POST /configure` requires admin authentication. OpenAPI is available at
+`/docs` while the service is running. Auth is enabled; do not disable it.
+
+Configuration changes submitted through `/configure` persist in the `app_db`
+volume and are reapplied after restart, layered over the Compose-provided
+defaults. Preserve that volume if changes should survive; the selected
+assessment profile itself is embedded in the Compose file.
+
+### Advisory limitation
+
+This local profile is useful for advisory retrieval of repository facts and
+decisions, not authoritative exact-identifier recall. Prior reviewed assessment
+evidence found one misspelled stored path conflicting with correct evidence on
+two path queries. Verify paths and other exact identifiers against the
+repository. The bounded harness integration checks are recorded separately in
+[the interface catalog](../design/coding-memory-interfaces.md); they are not
+benchmark scores or a guarantee of exact-identifier recall.
+
 ## Local CLI and MCP Compatibility
 
 The self-hosted server exposes a Platform-compatible adapter for local tools:

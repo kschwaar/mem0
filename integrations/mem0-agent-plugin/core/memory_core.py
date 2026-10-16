@@ -2522,6 +2522,8 @@ def _collect_memory_ids(
             ids.append(memory_id)
         if len(items) < FORGET_PAGE_SIZE:
             break
+    else:
+        raise RuntimeError("Memory listing reached its page limit; no remote memories were deleted")
 
 
 def _delete_memory(api_url: str, key: str, memory_id: str) -> bool:

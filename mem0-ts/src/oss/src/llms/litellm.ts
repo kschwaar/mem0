@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { OpenAILLM } from "./openai";
 import { LLMConfig, Message } from "../types";
 import { LLMResponse } from "./base";
@@ -13,6 +14,8 @@ export class LiteLLM extends OpenAILLM {
         "http://localhost:4000",
       model: config.model || "gpt-5-mini",
     });
+
+    traceRuntimeObject(this, "litellm");
   }
 
   async generateResponse(

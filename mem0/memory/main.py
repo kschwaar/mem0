@@ -2,12 +2,12 @@ import asyncio
 import concurrent.futures
 import gc
 import hashlib
-import json
 import logging
 import os
 import time
 import uuid
 import warnings
+from contextvars import copy_context
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
@@ -52,7 +52,7 @@ from mem0.memory.setup import mem0_dir, setup_config
 from mem0.memory.storage import SQLiteManager
 from mem0.memory.telemetry import MEM0_TELEMETRY, capture_event
 from mem0.memory.utils import (
-    extract_json,
+    parse_memory_extraction,
     parse_messages,
     parse_vision_messages,
     process_telemetry_filters,
@@ -1117,42 +1117,31 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
             logger.error(f"LLM extraction failed: {e}")
             raise LLMError(f"LLM extraction failed: {e}") from e
 
-        # Parse response
-        try:
-            response = remove_code_blocks(response)
-            if not response or not response.strip():
-                extracted_memories = []
-            else:
-                try:
-                    parsed = json.loads(response, strict=False)
-                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
-                except json.JSONDecodeError:
-                    extracted_json = extract_json(response)
-                    parsed = json.loads(extracted_json, strict=False)
-                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
-        except Exception as e:
-            logger.error(f"Error parsing extraction response: {e}")
-            extracted_memories = []
+        extracted_memories = parse_memory_extraction(response, uuid_mapping)
 
         if not extracted_memories:
             # Save messages even if nothing extracted
             self.db.save_messages(messages, session_scope)
             return []
 
-        # Phase 3: Batch embed all extracted memory texts
-        extracted_memories = [m for m in extracted_memories if isinstance(m, dict) and m.get("text")]
-        mem_texts = [m.get("text", "") for m in extracted_memories]
-        try:
-            mem_embeddings_list = self.embedding_model.embed_batch(mem_texts, "add")
-            embed_map = dict(zip(mem_texts, mem_embeddings_list))
-        except Exception:
-            # Fallback: embed individually
-            embed_map = {}
-            for text in mem_texts:
-                try:
-                    embed_map[text] = self.embedding_model.embed(text, "add")
-                except Exception as e:
-                    logger.warning(f"Failed to embed memory text: {e}")
+        # Phase 3: Embed only memories that need replacement text.
+        mem_texts = [
+            m["text"]
+            for m in extracted_memories
+            if str(m.get("event") or "ADD").upper() in {"ADD", "UPDATE"}
+        ]
+        embed_map = {}
+        if mem_texts:
+            try:
+                mem_embeddings_list = self.embedding_model.embed_batch(mem_texts, "add")
+                embed_map = dict(zip(mem_texts, mem_embeddings_list))
+            except Exception:
+                # Fallback: embed individually
+                for text in mem_texts:
+                    try:
+                        embed_map[text] = self.embedding_model.embed(text, "add")
+                    except Exception as e:
+                        logger.warning(f"Failed to embed memory text: {e}")
 
         # Phase 4: Per-memory CPU processing + Phase 5: Hash dedup
         # Build set of existing hashes for dedup
@@ -1167,29 +1156,31 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         existing_by_id = {mem.id: mem for mem in existing_results}
         seen_hashes = set()  # dedup within the current batch
         for mem in extracted_memories:
-            text = mem.get("text")
-            if not text or text not in embed_map:
+            event = str(mem.get("event") or "ADD").upper()
+            if event == "NONE":
+                continue
+            memory_id = uuid_mapping[str(mem["id"])] if event != "ADD" else None
+            if event == "DELETE":
+                existing_memory = existing_by_id[memory_id]
+                self._delete_memory(memory_id, existing_memory=existing_memory)
+                resolved_memories.append(
+                    {"id": memory_id, "memory": existing_memory.payload.get("data", ""), "event": "DELETE"}
+                )
                 continue
 
-            event = str(mem.get("event") or "ADD").upper()
-            if event in {"UPDATE", "DELETE", "NONE"}:
-                memory_id = uuid_mapping.get(str(mem.get("id")))
-                if memory_id is None:
-                    logger.warning("Skipping %s action with unknown existing-memory id: %r", event, mem.get("id"))
-                    continue
-                if event == "UPDATE":
-                    self._update_memory(memory_id, text, embed_map, metadata=deepcopy(metadata))
-                    resolved_memories.append(
-                        {
-                            "id": memory_id,
-                            "memory": text,
-                            "event": "UPDATE",
-                            "previous_memory": mem.get("old_memory") or existing_by_id[memory_id].payload.get("data"),
-                        }
-                    )
-                elif event == "DELETE":
-                    self._delete_memory(memory_id, existing_memory=existing_by_id[memory_id])
-                    resolved_memories.append({"id": memory_id, "memory": text, "event": "DELETE"})
+            text = mem["text"]
+            if text not in embed_map:
+                continue
+            if event == "UPDATE":
+                self._update_memory(memory_id, text, embed_map, metadata=deepcopy(metadata))
+                resolved_memories.append(
+                    {
+                        "id": memory_id,
+                        "memory": text,
+                        "event": "UPDATE",
+                        "previous_memory": mem.get("old_memory") or existing_by_id[memory_id].payload.get("data"),
+                    }
+                )
                 continue
             if event != "ADD":
                 logger.warning("Skipping memory with unsupported event: %r", event)
@@ -1969,7 +1960,10 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
                 return entity_store.search(query=entity_text, vectors=embedding, top_k=500, filters=search_filters)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                futures = {pool.submit(_search_entity, text, emb): text for text, emb in zip(entity_texts, embeddings)}
+                futures = {
+                    pool.submit(copy_context().run, _search_entity, text, emb): text
+                    for text, emb in zip(entity_texts, embeddings)
+                }
 
                 for future in concurrent.futures.as_completed(futures):
                     try:
@@ -2864,40 +2858,30 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
             logger.error(f"LLM extraction failed (async): {e}")
             raise LLMError(f"LLM extraction failed: {e}") from e
 
-        # Parse response
-        try:
-            response = remove_code_blocks(response)
-            if not response or not response.strip():
-                extracted_memories = []
-            else:
-                try:
-                    parsed = json.loads(response, strict=False)
-                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
-                except json.JSONDecodeError:
-                    extracted_json = extract_json(response)
-                    parsed = json.loads(extracted_json, strict=False)
-                    extracted_memories = parsed if isinstance(parsed, list) else parsed.get("memory", [])
-        except Exception as e:
-            logger.error(f"Error parsing extraction response (async): {e}")
-            extracted_memories = []
+        extracted_memories = parse_memory_extraction(response, uuid_mapping)
 
         if not extracted_memories:
             await asyncio.to_thread(self.db.save_messages, messages, session_scope)
             return []
 
-        # Phase 3: Batch embed all extracted memory texts
-        extracted_memories = [m for m in extracted_memories if isinstance(m, dict) and m.get("text")]
-        mem_texts = [m.get("text", "") for m in extracted_memories]
-        try:
-            mem_embeddings_list = await asyncio.to_thread(self.embedding_model.embed_batch, mem_texts, "add")
-            embed_map = dict(zip(mem_texts, mem_embeddings_list))
-        except Exception:
-            embed_map = {}
-            for text in mem_texts:
-                try:
-                    embed_map[text] = await asyncio.to_thread(self.embedding_model.embed, text, "add")
-                except Exception as e:
-                    logger.warning(f"Failed to embed memory text (async): {e}")
+        # Phase 3: Embed only memories that need replacement text.
+        mem_texts = [
+            m["text"]
+            for m in extracted_memories
+            if str(m.get("event") or "ADD").upper() in {"ADD", "UPDATE"}
+        ]
+        embed_map = {}
+        if mem_texts:
+            try:
+                mem_embeddings_list = await asyncio.to_thread(self.embedding_model.embed_batch, mem_texts, "add")
+                embed_map = dict(zip(mem_texts, mem_embeddings_list))
+            except Exception:
+                embed_map = {}
+                for text in mem_texts:
+                    try:
+                        embed_map[text] = await asyncio.to_thread(self.embedding_model.embed, text, "add")
+                    except Exception as e:
+                        logger.warning(f"Failed to embed memory text (async): {e}")
 
         # Phase 4: Per-memory CPU processing + Phase 5: Hash dedup
         existing_hashes = set()
@@ -2911,31 +2895,31 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         existing_by_id = {mem.id: mem for mem in existing_results}
         seen_hashes = set()
         for mem in extracted_memories:
-            text = mem.get("text")
-            if not text or text not in embed_map:
+            event = str(mem.get("event") or "ADD").upper()
+            if event == "NONE":
+                continue
+            memory_id = uuid_mapping[str(mem["id"])] if event != "ADD" else None
+            if event == "DELETE":
+                existing_memory = existing_by_id[memory_id]
+                await self._delete_memory(memory_id, existing_memory=existing_memory)
+                resolved_memories.append(
+                    {"id": memory_id, "memory": existing_memory.payload.get("data", ""), "event": "DELETE"}
+                )
                 continue
 
-            event = str(mem.get("event") or "ADD").upper()
-            if event in {"UPDATE", "DELETE", "NONE"}:
-                memory_id = uuid_mapping.get(str(mem.get("id")))
-                if memory_id is None:
-                    logger.warning(
-                        "Skipping %s action with unknown existing-memory id (async): %r", event, mem.get("id")
-                    )
-                    continue
-                if event == "UPDATE":
-                    await self._update_memory(memory_id, text, embed_map, metadata=deepcopy(metadata))
-                    resolved_memories.append(
-                        {
-                            "id": memory_id,
-                            "memory": text,
-                            "event": "UPDATE",
-                            "previous_memory": mem.get("old_memory") or existing_by_id[memory_id].payload.get("data"),
-                        }
-                    )
-                elif event == "DELETE":
-                    await self._delete_memory(memory_id, existing_memory=existing_by_id[memory_id])
-                    resolved_memories.append({"id": memory_id, "memory": text, "event": "DELETE"})
+            text = mem["text"]
+            if text not in embed_map:
+                continue
+            if event == "UPDATE":
+                await self._update_memory(memory_id, text, embed_map, metadata=deepcopy(metadata))
+                resolved_memories.append(
+                    {
+                        "id": memory_id,
+                        "memory": text,
+                        "event": "UPDATE",
+                        "previous_memory": mem.get("old_memory") or existing_by_id[memory_id].payload.get("data"),
+                    }
+                )
                 continue
             if event != "ADD":
                 logger.warning("Skipping memory with unsupported event (async): %r", event)

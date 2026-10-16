@@ -5,6 +5,7 @@ import { CohereProviderSettings, createCohere } from "@ai-sdk/cohere";
 import { AnthropicProviderSettings, createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI, GoogleGenerativeAIProviderSettings } from "@ai-sdk/google";
 import { createGroq, GroqProviderSettings } from "@ai-sdk/groq";
+import { withProviderGeneration } from "./runtime-tracing";
 
 // Define a private provider field
 class Mem0AITextGenerator implements LanguageModelV3 {
@@ -14,7 +15,7 @@ class Mem0AITextGenerator implements LanguageModelV3 {
     readonly supportedUrls: Record<string, RegExp[]> = {
         '*': [/.*/]
     };
-    private languageModel: any; // Use any type to avoid version conflicts
+    private readonly languageModel: LanguageModelV3;
 
     constructor(modelId: string, config: Mem0ProviderSettings, provider_config: ProviderSettings) {
         this.modelId = modelId;
@@ -69,13 +70,11 @@ class Mem0AITextGenerator implements LanguageModelV3 {
     }
 
     async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
-        const result = await this.languageModel.doGenerate(options);
-        return result as LanguageModelV3GenerateResult;
+        return withProviderGeneration(this.languageModel.provider, this.modelId, "generate", () => this.languageModel.doGenerate(options));
     }
 
     async doStream(options: LanguageModelV3CallOptions): Promise<LanguageModelV3StreamResult> {
-        const result = await this.languageModel.doStream(options);
-        return result as LanguageModelV3StreamResult;
+        return withProviderGeneration(this.languageModel.provider, this.modelId, "stream", () => this.languageModel.doStream(options));
     }
 }
 

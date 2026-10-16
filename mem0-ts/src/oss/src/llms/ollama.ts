@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import type { Ollama } from "ollama";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
@@ -17,6 +18,8 @@ export class OllamaLLM implements LLM {
     this.ensureModelExists().catch((err) => {
       logger.error(`Error ensuring model exists: ${err}`);
     });
+
+    traceRuntimeObject(this, "ollama");
   }
 
   private async ensureClient(): Promise<void> {

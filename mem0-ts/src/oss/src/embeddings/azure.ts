@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { AzureOpenAI } from "openai";
 import { Embedder } from "./base";
 import { EmbeddingConfig } from "../types";
@@ -21,6 +22,8 @@ export class AzureOpenAIEmbedder implements Embedder {
     });
     this.model = config.model || "text-embedding-3-small";
     this.embeddingDims = config.embeddingDims;
+
+    traceRuntimeObject(this, "azure");
   }
 
   async embed(text: string): Promise<number[]> {

@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import OpenAI from "openai";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
@@ -13,6 +14,8 @@ export class OpenAIStructuredLLM implements LLM {
       ...(config.timeout != null && { timeout: config.timeout }),
     });
     this.model = config.model || "gpt-5-mini";
+
+    traceRuntimeObject(this, "openai_structured");
   }
 
   async generateResponse(

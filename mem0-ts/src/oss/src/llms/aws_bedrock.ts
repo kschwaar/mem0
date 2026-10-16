@@ -1,3 +1,4 @@
+import { traceRuntimeObject } from "../utils/runtime_tracing";
 import { LLM, LLMResponse } from "./base";
 import { LLMConfig, Message } from "../types";
 
@@ -113,6 +114,7 @@ export class AWSBedrockLLM implements LLM {
 
     this.clientConfig = clientConfig;
     this.clientOverride = config.client;
+    traceRuntimeObject(this, "aws_bedrock");
   }
 
   /**

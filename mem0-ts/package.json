@@ -12,6 +12,9 @@
       ],
       "oss": [
         "./dist/oss/index.d.ts"
+      ],
+      "tracing": [
+        "./dist/tracing/index.d.ts"
       ]
     }
   },
@@ -25,6 +28,11 @@
       "types": "./dist/oss/index.d.ts",
       "require": "./dist/oss/index.js",
       "import": "./dist/oss/index.mjs"
+    },
+    "./tracing": {
+      "types": "./dist/tracing/index.d.ts",
+      "require": "./dist/tracing/index.js",
+      "import": "./dist/tracing/index.mjs"
     }
   },
   "files": [
@@ -32,18 +40,18 @@
   ],
   "scripts": {
     "clean": "rimraf dist",
-    "build": "npm run clean && npx prettier --check . && npx tsup",
+    "build": "pnpm run clean && pnpm exec prettier --check . && pnpm exec tsup",
     "dev": "npx nodemon",
     "start": "pnpm run example memory",
     "example": "ts-node src/oss/examples/vector-stores/index.ts",
-    "test": "jest",
-    "test:ci": "jest --coverage --ci",
-    "test:unit": "jest --coverage --ci --testPathIgnorePatterns='/node_modules/' '/dist/' 'integration'",
-    "test:integration": "jest --config jest.integration.config.js --forceExit",
-    "test:ts": "jest --config jest.config.js",
-    "test:watch": "jest --config jest.config.js --watch",
-    "format": "npm run clean && prettier --write .",
-    "format:check": "npm run clean && prettier --check ."
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
+    "test:ci": "pnpm test --coverage --ci",
+    "test:unit": "pnpm test --coverage --ci --testPathIgnorePatterns='/node_modules/' '/dist/' 'integration'",
+    "test:integration": "pnpm test --config jest.integration.config.js --forceExit",
+    "test:ts": "pnpm test --config jest.config.js",
+    "test:watch": "pnpm test --config jest.config.js --watch",
+    "format": "pnpm run clean && prettier --write .",
+    "format:check": "pnpm run clean && prettier --check ."
   },
   "tsup": {
     "entry": [
@@ -104,9 +112,15 @@
   },
   "dependencies": {
     "axios": "^1.18.0",
+    "@opentelemetry/api": "1.9.0",
     "openai": "^4.93.0",
     "uuid": "^11.1.1",
     "zod": "^3.24.1"
+  },
+  "optionalDependencies": {
+    "@opentelemetry/context-async-hooks": "2.6.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.213.0",
+    "@opentelemetry/sdk-trace-base": "2.6.0"
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": "^0.40.1",
