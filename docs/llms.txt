@@ -171,6 +171,7 @@ If the user is on a pre-current major (Python < 2, TS < 3, or a Platform call st
 - [Introduction](https://docs.mem0.ai/introduction) [Both]: Use when the user wants a one-page overview of how memory fits between the LLM and the app.
 - [Vibe Code with Mem0](https://docs.mem0.ai/vibecoding) [Both]: Use when the user is in Claude Code, Cursor, or Windsurf and wants memory wired into their editor.
 - [Platform Overview](https://docs.mem0.ai/platform/overview) [Platform]: Use when the user picks the managed product - 4-line integration, hosted API, dashboard.
+- [Mem0 Copilot](https://docs.mem0.ai/platform/copilot) [Platform]: Use when inspecting project memories, reviewing configuration changes, or testing extraction in the dashboard.
 - [Sign up as an agent](https://docs.mem0.ai/platform/agent-signup) [Platform]: Use when an AI agent needs to mint a Mem0 API key autonomously - four commands, no email or dashboard, human claims ownership later.
 - [Platform vs Open Source](https://docs.mem0.ai/platform/platform-vs-oss) [Both]: Use when the user is deciding between managed and self-hosted.
 - [Platform Quickstart](https://docs.mem0.ai/platform/quickstart) [Platform]: Use for the first Platform integration - API key plus `MemoryClient.add/search`.
@@ -185,7 +186,6 @@ If the user is on a pre-current major (Python < 2, TS < 3, or a Platform call st
 ## Core Concepts
 
 - [How Mem0 Works](https://docs.mem0.ai/core-concepts/how-it-works) [Both]: Use when explaining the end-to-end pipeline: extraction (ADD-only distillation), storage across vector/entity/history stores, and multi-signal retrieval.
-- [Memory Types](https://docs.mem0.ai/core-concepts/memory-types) [Both]: Use when checking which `memory_type` values actually work: `procedural_memory` is implemented, `semantic_memory` and `episodic_memory` are defined in the enum but rejected by validation.
 - [Memory Operations - Add](https://docs.mem0.ai/core-concepts/memory-operations/add) [Both]: Use when explaining how `add()` extracts facts, resolves conflicts, and writes to both stores.
 - [Memory Operations - Search](https://docs.mem0.ai/core-concepts/memory-operations/search) [Both]: Use when explaining how queries are processed and ranked.
 - [Memory Operations - Update](https://docs.mem0.ai/core-concepts/memory-operations/update) [Both]: Use when memories need to be edited in place or reconciled against new info.
@@ -197,6 +197,7 @@ If the user is on a pre-current major (Python < 2, TS < 3, or a Platform call st
 ### Features - Essential
 - [V2 Memory Filters](https://docs.mem0.ai/platform/features/v2-memory-filters) [Platform]: Use when compound filters (AND/OR on metadata, entity, time) are needed at search.
 - [Entity-Scoped Memory](https://docs.mem0.ai/platform/features/entity-scoped-memory) [Platform]: Use when partitioning memories by user, agent, app, or run.
+- [Profiles](https://docs.mem0.ai/platform/features/user-profiles) [Platform]: Use when a structured always-current summary of a user is needed in one read, instead of searching their memories.
 - [Graph Memory](https://docs.mem0.ai/platform/features/graph-memory) [Platform]: Use when connecting facts across memories through shared entities for entity-centric or multi-hop questions.
 - [Async Client](https://docs.mem0.ai/platform/features/async-client) [Platform]: Use when the app issues many concurrent Mem0 calls and needs non-blocking I/O.
 - [Multimodal Support](https://docs.mem0.ai/platform/features/multimodal-support) [Platform]: Use when storing images or PDFs as memory input.
@@ -256,7 +257,7 @@ If the user is on a pre-current major (Python < 2, TS < 3, or a Platform call st
 - [Agno](https://docs.mem0.ai/integrations/agno) [Platform]: Use when the user is on Agno.
 - [Camel AI](https://docs.mem0.ai/integrations/camel-ai) [Both]: Use when the user is on Camel AI.
 - [ChatDev](https://docs.mem0.ai/integrations/chatdev) [Platform]: Use when the user is on ChatDev.
-- [Hermes](https://docs.mem0.ai/integrations/hermes) [Both]: Use when the user is on Hermes.
+- [Hermes](https://docs.mem0.ai/integrations/hermes) [Both]: Use when installing or configuring the standalone Hermes memory plugin, or migrating from the bundled Mem0 provider.
 - [Pi Agent](https://docs.mem0.ai/integrations/pi-agent) [Platform]: Use when adding automatic capture, prompt recall, scoped memory, and six memory commands to Pi Agent.
 - [DeepSeek Harness](https://docs.mem0.ai/integrations/deepseek-plugin) [Platform]: Use when adding automatic recall, completed-turn capture, and native search/add tools to DeepSeek Harness.
 - [OpenAI Agents SDK](https://docs.mem0.ai/integrations/openai-agents-sdk) [Platform]: Use when the user is on the OpenAI Agents SDK.
@@ -268,13 +269,13 @@ If the user is on a pre-current major (Python < 2, TS < 3, or a Platform call st
 - [Strands Agents](https://docs.mem0.ai/integrations/strands) [Both]: Use when the user is on AWS Strands and wants a native MemoryStore.
 
 ### AI Coding Tools
-- [Claude Code](https://docs.mem0.ai/integrations/claude-code) [Both]: Use when wiring memory into Claude Code.
+- [Claude Code](https://docs.mem0.ai/integrations/claude-code) [Platform]: Use when wiring memory into Claude Code.
 - [Claude.ai](https://docs.mem0.ai/integrations/claude-ai) [Platform]: Use when connecting Mem0 to Claude.ai (the hosted web app) via a custom remote MCP connector, or when Claude's native memory seems to be crowding out mem0 tool calls.
-- [Cursor](https://docs.mem0.ai/integrations/cursor) [Platform]: Use when adding lifecycle capture, explicit memory recall, six skills, and a sidekick to Cursor.
+- [Cursor](https://docs.mem0.ai/integrations/cursor) [Platform]: Use when adding lifecycle capture, explicit memory recall, and six memory skills to Cursor.
 - [Codex](https://docs.mem0.ai/integrations/codex) [Platform]: Use when adding automatic capture and recall, six memory skills, and a search tool to OpenAI Codex.
 - [Kimi Code](https://docs.mem0.ai/integrations/kimi) [Platform]: Use when adding persistent project memory to Kimi Code through its native plugin lifecycle.
 - [OpenCode](https://docs.mem0.ai/integrations/opencode) [Platform]: Use when adding ten native SDK memory tools, automatic context, seven skills, and project scoping to OpenCode.
-- [Antigravity](https://docs.mem0.ai/integrations/antigravity) [Platform]: Use when adding lifecycle capture, explicit recall, six memory skills, and a native sidekick to Google Antigravity.
+- [Antigravity](https://docs.mem0.ai/integrations/antigravity) [Platform]: Use when adding lifecycle capture, explicit recall, and six memory skills to Google Antigravity.
 
 ### Voice & Real-time
 - [LiveKit](https://docs.mem0.ai/integrations/livekit) [Platform]: Use when building real-time voice/video with memory.
@@ -326,6 +327,7 @@ If the user is on a pre-current major (Python < 2, TS < 3, or a Platform call st
 - [Healthcare Google ADK](https://docs.mem0.ai/cookbooks/integrations/healthcare-google-adk) [Platform]: Use when the domain is medical and the framework is Google ADK.
 - [AWS Bedrock](https://docs.mem0.ai/cookbooks/integrations/aws-bedrock) [OSS]: Use when deploying with AWS managed model services.
 - [Tavily Search](https://docs.mem0.ai/cookbooks/integrations/tavily-search) [Platform]: Use when the agent layers web search on memory.
+- [Company Brain (Mem0 Platform + Supabase)](https://docs.mem0.ai/cookbooks/integrations/supabase) [Platform]: Use to build a shared org brain on Mem0 Platform with Supabase as system of record and the MCP server as the access layer (with a new-hire onboarding demo).
 
 ### Framework Examples
 - [LlamaIndex React](https://docs.mem0.ai/cookbooks/frameworks/llamaindex-react) [Both]: Use when building a React UI with LlamaIndex and memory.
@@ -363,6 +365,11 @@ All API Reference docs describe Mem0 Platform REST endpoints (requires API key).
 ### Entities
 - [Get Users](https://docs.mem0.ai/api-reference/entities/get-users) [Platform]: Use when listing users, agents, or apps known to a project.
 - [Delete User](https://docs.mem0.ai/api-reference/entities/delete-user) [Platform]: Use when removing an entity and all its memories.
+- [Get Profile](https://docs.mem0.ai/api-reference/profiles/get-profile) [Platform]: Use when reading a user's structured profile and branching on its generation status.
+- [Get Profile Settings](https://docs.mem0.ai/api-reference/profiles/get-profile-settings) [Platform]: Use when checking the project's profile schema, instructions, or enabled flag.
+- [Update Profile Settings](https://docs.mem0.ai/api-reference/profiles/update-profile-settings) [Platform]: Use when defining or changing the JSON Schema that shapes profiles for a project.
+- [Generate Profiles](https://docs.mem0.ai/api-reference/profiles/generate-profiles) [Platform]: Use when building profiles now: a sample of ten, or one entity.
+- [Get Generation Job](https://docs.mem0.ai/api-reference/profiles/get-profile-job) [Platform]: Use when checking how far a generation has got, and whether it finished.
 
 ### Organizations
 - [Create Organization](https://docs.mem0.ai/api-reference/organization/create-org) [Platform]: Use when setting up a new org.
@@ -419,17 +426,17 @@ Each subdirectory is a Claude Code Skill (`SKILL.md` + supporting assets). Load 
 
 Source: https://github.com/mem0ai/mem0/tree/main/integrations/claude-code-plugin
 
-The self-contained Claude Code plugin lives in `integrations/claude-code-plugin/` (v0.3.0, installs as `mem0@mem0-plugins`). It captures evidence locally through lifecycle hooks, extracts memories in a detached background worker, and exposes a single local MCP tool, `search_memories`, plus six `/mem0:*` skills and the unchanged `mem0:sidekick` agent. Pure-stdlib Python, nothing to install.
+The self-contained Claude Code plugin lives in `integrations/claude-code-plugin/` (v0.3.1, installs as `mem0@mem0-plugins`). It captures evidence locally through lifecycle hooks, extracts memories in a detached background worker, and exposes a single local MCP tool, `search_memories`, plus six `/mem0:*` skills and `mem0:sidekick`, available only in Claude Code. Pure-stdlib Python, nothing to install.
 
 ### Coding-Agent Plugin Sources
 
 Source: https://github.com/mem0ai/mem0/tree/main/integrations/agent-plugin-core
 
-The `integrations/agent-plugin-core/` directory is the single source for shared Python and TypeScript memory behavior. Native plugins live in their own sibling directories, while `integrations/mem0-agent-plugin/` is the single portable Agent Plugins v1 package. TypeScript integrations reuse the core's lifecycle, formatting, identity, scoping, and telemetry utilities while keeping their public packages and native host APIs unchanged.
+The `integrations/agent-plugin-core/` directory is the single source for shared Python and TypeScript memory behavior. Native plugins live in their own sibling directories, while `integrations/mem0-agent-plugin/` is the single portable Agent Plugins v1 package. Sidekick is available only in Claude Code. The portable package provides search and skills but no automatic capture; its remember skill cannot save a new memory on its own. Shared Python search accepts optional `run_id` for session-specific recall in every scope. TypeScript integrations reuse the core's lifecycle, formatting, identity, scoping, and telemetry utilities while keeping their public packages and native host APIs unchanged.
 
 Editor-specific setup docs (already listed above under `## Integrations > AI Coding Tools`):
 
-- `integrations/claude-code` [Both]
+- `integrations/claude-code` [Platform]
 - `integrations/cursor` [Platform]
 - `integrations/codex` [Platform]
 - `integrations/kimi` [Platform]

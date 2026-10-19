@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sys
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,7 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = ROOT.parents[1]
 sys.path.insert(0, str(ROOT))
 
-from build.build import build, bundle_drift, render_template, replace_output  # noqa: E402
+from build.build import (  # noqa: E402
+    build,
+    bundle_drift,
+    render_template,
+    replace_output,
+)
 from build.validate import validate_bundle  # noqa: E402
 
 
@@ -57,11 +62,44 @@ def test_portable_bundle_is_conformant_and_self_contained(tmp_path: Path) -> Non
     assert "env" not in server
     assert not (root / "core" / "hook_runner.py").exists()
     assert not (root / "core" / "flush_worker.py").exists()
+    assert not (root / "agents").exists()
     for skill in (root / "skills").glob("*/SKILL.md"):
         frontmatter = skill.read_text(encoding="utf-8").split("---", 2)[1]
         keys = {line.split(":", 1)[0] for line in frontmatter.splitlines() if ":" in line}
         assert keys <= {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
     assert not any(path.is_symlink() for path in root.rglob("*"))
+
+
+def _harness_identity(root: Path) -> dict[str, str]:
+    """Read the generated core/_harness_id.py without importing it."""
+    values: dict[str, str] = {}
+    for line in (root / "core" / "_harness_id.py").read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            name, _, raw = line.partition("=")
+            values[name.strip()] = raw.strip().strip('"')
+    return values
+
+
+def test_the_portable_bundle_declares_no_host_application(tmp_path: Path) -> None:
+    """It runs in whatever editor a user drops it into, so it cannot know the host.
+
+    X-Application is allowlisted server-side. A guessed value is silently dropped
+    there, which is the worst outcome: the wire says we know the host and the
+    stored event says we do not.
+    """
+    identity = _harness_identity(build("mem0-agent-plugin", "portable", tmp_path / "portable"))
+
+    assert identity["PLATFORM_APPLICATION"] == ""
+    # The PostHog-side label is still useful for grouping and stays populated.
+    assert identity["HARNESS_ID"] == "coding-agent"
+    assert identity["PLATFORM_SOURCE"] == "MEM0_PLUGIN"
+
+
+@pytest.mark.parametrize("host", ["claude-code", "cursor", "codex", "kimi", "antigravity"])
+def test_a_native_bundle_names_the_host_it_was_built_for(host: str, tmp_path: Path) -> None:
+    identity = _harness_identity(build(host, "native", tmp_path / host))
+
+    assert identity["PLATFORM_APPLICATION"] == host
 
 
 @pytest.mark.parametrize("host", ["claude-code", "cursor", "codex", "kimi", "antigravity"])
@@ -71,6 +109,19 @@ def test_native_bundle_is_self_contained(host: str, tmp_path: Path) -> None:
     assert (root / "core" / "memory_core.py").is_file()
     assert (root / "skills" / "remember" / "SKILL.md").is_file()
     assert not any(path.is_symlink() for path in root.rglob("*"))
+
+
+@pytest.mark.parametrize("host", ["claude-code", "cursor", "codex", "kimi", "antigravity"])
+def test_only_claude_bundles_sidekick(host: str, tmp_path: Path) -> None:
+    root = build(host, "native", tmp_path / host)
+    if host == "claude-code":
+        agent = (root / "agents" / "sidekick.md").read_text()
+        assert "model: sonnet" in agent
+        assert "isolation: worktree" in agent
+    else:
+        assert not (root / "agents").exists()
+        for path in root.rglob("*.json"):
+            assert "sidekick" not in path.read_text().lower()
 
 
 @pytest.mark.parametrize("host", ["claude-code", "cursor", "codex", "kimi", "antigravity"])

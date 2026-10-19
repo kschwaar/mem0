@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -838,7 +839,7 @@ def test_tool_capture_identifies_main_and_sidekick_roles():
     )
 
     assert main["agent_role"] == "main"
-    assert sidekick["agent_role"] == "sidekick"
+    assert sidekick["agent_role"] == "subagent"
     assert sidekick["agent_id"] == "agent-123"
     assert sidekick["agent_type"] == "mem0:sidekick"
 
@@ -1700,7 +1701,7 @@ def test_checkpoint_queues_only_prod_extraction_with_canonical_evidence(
     store.record_event(
         repo(),
         "s1",
-        "sidekick_stop",
+        "subagent_stop",
         {
             "agent_id": "agent-1",
             "agent_type": "mem0:sidekick",
@@ -2341,8 +2342,8 @@ def test_sidekick_instructions_reject_unrequested_related_changes():
     prompt = (PLUGIN_ROOT / "agents" / "sidekick.md").read_text()
     normalized = " ".join(prompt.split())
     assert "Skill" in prompt.split("---", 2)[1]
-    assert "ALWAYS call `search_memories` before answering anything" in normalized
-    assert "Do not rely on the chat window" in normalized
+    assert "call `search_memories` with a" in normalized
+    assert "focused question before searching the repository again" in normalized
     assert "Complete only the work the main agent assigned" in normalized
     assert "Do not make related improvements" in normalized
     assert "report them separately" in normalized
@@ -2372,9 +2373,9 @@ def test_sidekick_reuses_parent_memory_once_and_records_lifecycle(
     }
 
     with patch.object(memory_core, "resolve_repo", return_value=repo()):
-        first = memory_core.record_sidekick_start(store, start_input)
-        repeated = memory_core.record_sidekick_start(store, start_input)
-        memory_core.record_sidekick_stop(
+        first = memory_core.record_subagent_start(store, start_input)
+        repeated = memory_core.record_subagent_start(store, start_input)
+        memory_core.record_subagent_stop(
             store,
             {
                 **start_input,
@@ -2394,11 +2395,11 @@ def test_sidekick_reuses_parent_memory_once_and_records_lifecycle(
         row[0]
         for row in store.conn.execute("SELECT kind FROM events ORDER BY id").fetchall()
     ]
-    assert events == ["sidekick_start", "sidekick_start", "sidekick_stop"]
+    assert events == ["subagent_start", "subagent_start", "subagent_stop"]
     store.close()
 
 
-def test_sidekick_stop_without_agent_id_closes_latest_matching_run(isolated_env):
+def test_subagent_stop_without_agent_id_closes_latest_matching_run(isolated_env):
     store = memory_core.EvidenceStore()
     start_input = {
         "session_id": "s1",
@@ -2408,8 +2409,8 @@ def test_sidekick_stop_without_agent_id_closes_latest_matching_run(isolated_env)
     }
 
     with patch.object(memory_core, "resolve_repo", return_value=repo()):
-        memory_core.record_sidekick_start(store, start_input)
-        memory_core.record_sidekick_stop(
+        memory_core.record_subagent_start(store, start_input)
+        memory_core.record_subagent_stop(
             store,
             {
                 "session_id": "s1",
@@ -2871,14 +2872,14 @@ def test_status_output_explains_memory_activity_in_plain_language(capsys):
             "events": 8,
             "flushes": 2,
             "retrievals": 3,
-            "sidekick_runs": 1,
+            "subagent_runs": 1,
             "last_operation": {
                 "operation": "flush",
                 "success": 1,
                 "duration_ms": 123.4,
                 "item_count": 2,
             },
-            "last_sidekick": {
+            "last_subagent": {
                 "stopped_at": "now",
                 "context_chars": 240,
                 "agent_id": "agent-1",
@@ -2888,9 +2889,9 @@ def test_status_output_explains_memory_activity_in_plain_language(capsys):
 
     output = capsys.readouterr().out
     assert "Saved on this computer: 8 session details, 2 memory updates" in output
-    assert "3 memories returned, 1 sidekick runs" in output
+    assert "3 memories returned, 1 subagent runs" in output
     assert "Last memory update: succeeded" in output
-    assert "Last sidekick: finished, received 240 characters of memory" in output
+    assert "Last subagent: finished, received 240 characters of memory" in output
     assert "checkpoint" not in output.lower()
     assert "injected" not in output.lower()
 
@@ -3426,7 +3427,7 @@ def test_plugin_entrypoints_share_explicit_claude_data_dir(tmp_path, monkeypatch
     status_payload = json.loads(status.stdout)
     assert status_payload["data_dir"] == str(canonical_data)
     assert status_payload["retrievals"] == 1
-    assert status_payload["sidekick_runs"] == 1
+    assert status_payload["subagent_runs"] == 1
     assert not (conflicting_data / "evidence.sqlite3").exists()
 
 
@@ -3495,7 +3496,12 @@ def test_automatic_flush_can_be_disabled_for_external_harnesses(isolated_env):
 def test_version_is_single_sourced():
     manifest = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text())
     assert manifest["name"] == "mem0"
-    assert manifest["version"] == memory_core.PLUGIN_VERSION == "0.3.1"
+    # Compared against PLUGIN_VERSION, never a literal. A hardcoded version here
+    # was one more place to edit on every release, inside the test asserting the
+    # version is single-sourced, and it caught nothing that the agreement checks
+    # below do not: fifteen places set to the same wrong value would still pass.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", memory_core.PLUGIN_VERSION), memory_core.PLUGIN_VERSION
+    assert manifest["version"] == memory_core.PLUGIN_VERSION
     root = REPOSITORY_ROOT
     for mp in (root / "marketplace.json", root / ".claude-plugin" / "marketplace.json"):
         entry = next(p for p in json.loads(mp.read_text())["plugins"] if p["name"] == "mem0")
@@ -4362,7 +4368,7 @@ def test_flush_sends_unified_body_with_both_agent_and_user_id(isolated_env, monk
     assert sent_body["run_id"] == "s1"
     assert "lane" not in sent_body["metadata"]
     assert "Save concise repository facts" in sent_body["agent_custom_instructions"]
-    assert "invocation that succeeded" in sent_body["agent_custom_instructions"]
+    assert "Write about the repository, not the user" in sent_body["agent_custom_instructions"]
     assert "Do not save repository facts" in sent_body["custom_instructions"]
     assert sent_body["custom_categories"] == memory_core.CODING_MEMORY_CATEGORIES
     store.close()
@@ -4628,9 +4634,9 @@ def test_extraction_batches_bound_individual_messages_without_losing_text():
 
 def test_overlapping_subagent_stop_without_id_does_not_guess(isolated_env):
     store = memory_core.EvidenceStore()
-    store.start_sidekick(repo(), "s1", "first", "sidekick", 0)
-    store.start_sidekick(repo(), "s1", "second", "sidekick", 0)
-    stopped = store.stop_sidekick(repo(), "s1", "", "sidekick", "", "Uncorrelated response")
+    store.start_subagent(repo(), "s1", "first", "sidekick", 0)
+    store.start_subagent(repo(), "s1", "second", "sidekick", 0)
+    stopped = store.stop_subagent(repo(), "s1", "", "sidekick", "", "Uncorrelated response")
     assert stopped not in {"first", "second"}
     rows = store.conn.execute("SELECT agent_id, stopped_at, final_message FROM sidekick_runs").fetchall()
     assert all(row["stopped_at"] is None for row in rows if row["agent_id"] in {"first", "second"})

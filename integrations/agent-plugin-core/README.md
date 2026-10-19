@@ -8,7 +8,7 @@ This directory is the single source of shared memory behavior for Mem0 coding-ag
 integrations/
 ├── agent-plugin-core/       # Shared source; never installed as a plugin
 │   ├── python/              # Claude-derived capture, recall, MCP, scoping, and telemetry
-│   ├── typescript/          # Shared lifecycle, formatting, identity, scoping, and telemetry
+│   ├── typescript/          # Shared lifecycle, search prompts, formatting, identity, scoping, and telemetry
 │   ├── skills/              # The only source for the six generated memory skills
 │   ├── build/               # Bundle builder, schemas, and validation
 │   ├── conformance/         # One offline/live verification entry point
@@ -23,9 +23,31 @@ integrations/
 
 Each native directory owns only its manifest, native hooks or adapter, tests, and `plugin-build.json`. Its `core/` and `skills/` directories are generated from this module. They are committed because clients install a self-contained plugin directory and the Agent Plugins specification forbids package files from resolving outside the plugin root.
 
-Claude Code remains the behavioral source of truth. Its sidekick stays at `claude-code-plugin/agents/sidekick.md` and is not generated or copied to hosts without a compatible native subagent interface.
+Sidekick belongs only to Claude Code. Its agent definition is in `claude-code-plugin/agents/sidekick.md`; its hooks are in `claude-code-plugin/adapters/claude/hook.py`. Other plugins must not register Sidekick. The shared core handles memory and native subagent tracking for Claude Code and Codex.
 
 TypeScript integrations (`openclaw`, `opencode-plugin`, `pi-agent-plugin`, and `deepseek-plugin`) import `typescript/src/` at build time. Their package builders include the shared implementation in their normal output; they do not carry checked-in copies.
+
+## Shared memory behavior
+
+The six Python packages use the same `search_memories` MCP tool and six skill templates. Native hooks collect conversations and flush them to Mem0 in the background. The portable package uses the Agent Plugins v1 layout so compatible hosts can load its MCP server and skills. It has no lifecycle hooks or flush worker; its bundled `remember` skill assumes automatic capture and cannot save a memory on its own.
+
+Python search accepts `query`, `top_k`, `category`, `scope`, and optional `run_id`:
+
+| Scope | Memories searched |
+| --- | --- |
+| `repo` (default) | Shared repository memories and your personal memories in that repository |
+| `dir` | Shared memories from the current directory and its children, plus your personal repository memories |
+| `mine` | Your personal memories in that repository |
+
+`run_id` filters any scope to memories saved in a known coding-agent session. Omit it for recall across sessions; it does not attribute the search request to the current session. Native Python extraction writes include the session's `run_id`.
+
+New Git repository writes use a hashed remote identity for shared `agent_id`. Search and explicit shared-memory deletion include both that ID and the legacy unhashed ID under the same `app_id`. Legacy memories remain accessible, but their original ambiguity between matching owner/repository names on different Git hosts remains.
+
+Captured prompts and responses preserve their full text after secret redaction. Python extraction splits oversized input across requests without dropping message text. The session-end worker flushes the conversation already collected by hooks without adding the final answer again. Search queries, retrieved context, and tool evidence have separate limits.
+
+TypeScript hosts reuse redaction, lifecycle utilities, and the search prompts in `typescript/src/prompts.ts`, which a test keeps identical to the Python core. They retain their own tools, scopes, and capture events. They do not inherit the Python `repo`/`dir`/`mine` contract or its background batching. OpenCode captures selected user prompts; Pi and DeepSeek capture completed conversation turns; OpenClaw selects recent messages and earlier summaries, then filters noise. Removing message-length truncation does not turn these integrations into complete transcript archives.
+
+For installation, follow the host guides: [Claude Code](../../docs/integrations/claude-code.mdx), [Cursor](../../docs/integrations/cursor.mdx), [Codex](../../docs/integrations/codex.mdx), [Kimi](../../docs/integrations/kimi.mdx), and [Antigravity](../../docs/integrations/antigravity.mdx).
 
 ## Build and verify
 
@@ -86,18 +108,20 @@ For another native Python host:
 
 Keep capture, recall, memory scoping, redaction, skill text, and telemetry in this shared module. Host directories should contain only behavior required by their native SDK.
 
-For a TypeScript host, import the shared lifecycle modules directly and keep only native SDK registration in the integration. Do not advertise capture, compaction, or sidekick behavior unless the host exposes the necessary lifecycle seam.
+For a TypeScript host, import the shared lifecycle modules directly and keep only native SDK registration in the integration. Do not advertise capture or compaction behavior unless the host exposes the necessary lifecycle seam. Sidekick is limited to Claude Code.
 
 ## Host capture capabilities
 
 | Host | Conversation capture | Tool outcomes | Subagent context and correlation |
 | --- | --- | --- | --- |
 | Claude Code | Incremental active transcript branch | Native success/failure hooks | Parent context; native agent ID |
-| Cursor | Prompt and response hooks; duplicate responses suppressed | Native success/failure hooks | Sidekick searches itself; no parent-injection claim |
+| Cursor | Prompt and response hooks; duplicate responses suppressed | Native success/failure hooks | No plugin subagent hooks or agent declaration |
 | Codex | Native prompt and final-response fields | Structured failure indicators when present; otherwise unknown | Parent context; native agent ID |
-| Kimi | Prompt hooks and completed v2 wire output | Native success/failure hooks | Parent context; without an ID, a stop matches only one unambiguous active run |
-| Antigravity | Incremental completed transcript messages, including later prompts | Native tool errors | Sidekick searches itself; no worktree-isolation claim |
+| Kimi | Prompt hooks and completed v2 wire output | Native success/failure hooks | No plugin subagent hooks or agent declaration |
+| Antigravity | Incremental completed transcript messages, including later prompts | Native tool errors | No plugin subagent hooks or agent declaration |
 | Portable v1 | Explicit memory skills | No native lifecycle hooks | No native subagent declaration |
+
+Python status uses `subagent_runs` and `last_subagent`. Legacy SQLite names and event handling keep existing records and running workers compatible.
 
 An uncorrelated subagent completion is kept as its own record; the plugin never guesses which overlapping run completed. Codex's documented hook fields already match the shared input contract, so no speculative field aliases or unsupported failure event are registered.
 

@@ -29,7 +29,7 @@ from typing import Any, Iterable
 import telemetry
 
 DEFAULT_API_URL = "https://api.mem0.ai"
-PLUGIN_VERSION = "0.3.1"
+PLUGIN_VERSION = "0.3.3"
 
 _harness_name: str = "generic"
 _harness_env_prefix: str = "MEM0_PLUGIN"
@@ -76,15 +76,13 @@ MAX_FLUSH_ATTEMPTS = 5
 FORGET_PAGE_SIZE = 100
 FORGET_MAX_PAGES = 50
 
-PROJECT_MEMORY_INSTRUCTIONS = """Save concise repository facts that will help anyone with future coding work in this repository.
+PROJECT_MEMORY_INSTRUCTIONS = """Save concise repository facts that will help with future coding work.
 
 A completed change should produce one memory explaining the resulting behavior, where it is implemented when useful, and any important constraints or reasoning. Exploration or accepted decisions may produce separate memories only when they are independently useful.
 
-A command that failed and was then made to work should produce one memory naming the failing invocation, the error it returned, and the invocation that succeeded. Do not save one-off errors caused by an edit still in progress, transient network failures, or anything a rerun would fix on its own.
+Use the coding agent's final response for conclusions about current repository behavior. Do not save proposed or recommended changes unless the user accepted them or the coding agent completed them. Treat subagent responses as supporting repository evidence, not as decisions.
 
-Use the current coding agent's final response for conclusions about current repository behavior. Do not save proposed or recommended changes unless the user accepted them or the coding agent completed them. Treat subagent responses as supporting repository evidence, not as decisions.
-
-Write about the repository, not the user, assistant, session, or task. Do not save personal preferences. Do not save a memory that only states which repository, branch, or directory the session worked in. Do not include test results, documentation updates, release notes, or temporary state.
+Write about the repository, not the user, assistant, session, or task. Do not include test results, documentation updates, release notes, or temporary state.
 
 If nothing useful was established, return no memories."""
 
@@ -529,7 +527,7 @@ def _checkpoint_message(event: dict[str, Any]) -> str:
             if text:
                 return text
         return redact(payload.get("text", "")).strip()
-    if kind == "sidekick_stop":
+    if kind in {"subagent_stop", "sidekick_stop"}:
         return redact(payload.get("final_message", "")).strip()
     return ""
 
@@ -601,6 +599,7 @@ class EvidenceStore:
         self.conn.close()
 
     def _migrate(self) -> None:
+        # Keep the legacy table name so existing databases and in-flight workers remain compatible.
         self.conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS events (
@@ -693,8 +692,7 @@ class EvidenceStore:
 
             """
         )
-        # Remove the pre-0.1.1 no-tools snapshot implementation. The real coding
-        # sidekick is a native Claude Code agent and stores no state in this DB.
+        # Remove the pre-0.1.1 snapshot implementation.
         self.conn.executescript(
             """
             DROP TABLE IF EXISTS sidekick_calls;
@@ -1046,7 +1044,7 @@ class EvidenceStore:
             if row["memory_text"]
         ]
 
-    def start_sidekick(
+    def start_subagent(
         self,
         repo: RepoContext,
         session_id: str,
@@ -1054,7 +1052,7 @@ class EvidenceStore:
         agent_type: str,
         context_chars: int,
     ) -> bool:
-        """Record one native sidekick instance and whether context was first sent."""
+        """Record one native subagent instance and whether context was first sent."""
         with self.conn:
             cursor = self.conn.execute(
                 """INSERT OR IGNORE INTO sidekick_runs
@@ -1072,7 +1070,7 @@ class EvidenceStore:
             )
         return int(cursor.rowcount) > 0
 
-    def stop_sidekick(
+    def stop_subagent(
         self,
         repo: RepoContext,
         session_id: str,
@@ -1227,7 +1225,7 @@ class EvidenceStore:
                 cursor = self.conn.execute(
                     f"DELETE FROM {table} WHERE {column} = ?", (repo_id,)
                 )
-                removed[table] = max(int(cursor.rowcount), 0)
+                removed["subagent_runs" if table == "sidekick_runs" else table] = max(int(cursor.rowcount), 0)
         return removed
 
     def status(self, repo_id: str) -> dict[str, Any]:
@@ -1243,7 +1241,7 @@ class EvidenceStore:
                FROM operations WHERE repo_id = ? ORDER BY id DESC LIMIT 1""",
             (repo_id,),
         ).fetchone()
-        last_sidekick = self.conn.execute(
+        last_subagent = self.conn.execute(
             """SELECT session_id, agent_id, agent_type, started_at, stopped_at,
                       context_chars
                FROM sidekick_runs WHERE repo_id = ?
@@ -1255,9 +1253,9 @@ class EvidenceStore:
             "events": count("events"),
             "flushes": count("flushes"),
             "retrievals": count("retrievals"),
-            "sidekick_runs": count("sidekick_runs"),
+            "subagent_runs": count("sidekick_runs"),
             "last_operation": dict(last_operation) if last_operation else None,
-            "last_sidekick": dict(last_sidekick) if last_sidekick else None,
+            "last_subagent": dict(last_subagent) if last_subagent else None,
         }
 
 
@@ -1329,7 +1327,7 @@ def tool_payload(hook_input: dict[str, Any], *, failed: bool | None = False) -> 
         "tool": name,
         "failed": failed,
         "duration_ms": hook_input.get("duration_ms"),
-        "agent_role": "sidekick" if hook_input.get("agent_id") else "main",
+        "agent_role": "subagent" if hook_input.get("agent_id") else "main",
     }
     if hook_input.get("agent_id"):
         payload["agent_id"] = bounded(hook_input["agent_id"], 200)
@@ -1389,35 +1387,33 @@ def record_tool(
     )
 
 
-def record_sidekick_start(
-    store: EvidenceStore, hook_input: dict[str, Any], *, inject_context: bool = True
+def record_subagent_start(
+    store: EvidenceStore, hook_input: dict[str, Any]
 ) -> str:
-    """Record a native sidekick and reuse the main turn's retrieved memories."""
+    """Record a native subagent and reuse the main turn's retrieved memories."""
     session_id = _session_id(hook_input)
     repo = store.repo_for_session(session_id, hook_input.get("cwd"))
     agent_id = bounded(hook_input.get("agent_id", "unknown-agent"), 200)
-    agent_type = bounded(hook_input.get("agent_type", "mem0:sidekick"), 200)
+    agent_type = bounded(hook_input.get("agent_type", "unknown-agent"), 200)
     context = combine_context(
         format_context(store.injected_memories(session_id, repo.identity))
     )
-    if not inject_context:
-        context = ""
-    first_start = store.start_sidekick(
+    first_start = store.start_subagent(
         repo, session_id, agent_id, agent_type, len(context)
     )
     store.record_event(
         repo,
         session_id,
-        "sidekick_start",
+        "subagent_start",
         {
             "agent_id": agent_id,
             "agent_type": agent_type,
             "context_chars": len(context) if first_start else 0,
-            "worktree_root": bounded(repo.root, 2000),
+            "repo_root": bounded(repo.root, 2000),
         },
     )
     telemetry.record(
-        "sidekick",
+        "subagent",
         repo=repo,
         session_id=session_id,
         phase="start",
@@ -1427,14 +1423,14 @@ def record_sidekick_start(
     return context if first_start else ""
 
 
-def record_sidekick_stop(store: EvidenceStore, hook_input: dict[str, Any]) -> None:
+def record_subagent_stop(store: EvidenceStore, hook_input: dict[str, Any]) -> None:
     session_id = _session_id(hook_input)
     repo = store.repo_for_session(session_id, hook_input.get("cwd"))
-    agent_type = bounded(hook_input.get("agent_type", "mem0:sidekick"), 200)
+    agent_type = bounded(hook_input.get("agent_type", "unknown-agent"), 200)
     agent_id = bounded(hook_input.get("agent_id", ""), 200)
     final_message = redact(hook_input.get("last_assistant_message", "")).strip()
     transcript_path = bounded(hook_input.get("agent_transcript_path", ""), 2000)
-    agent_id = store.stop_sidekick(
+    agent_id = store.stop_subagent(
         repo,
         session_id,
         agent_id,
@@ -1445,7 +1441,7 @@ def record_sidekick_stop(store: EvidenceStore, hook_input: dict[str, Any]) -> No
     store.record_event(
         repo,
         session_id,
-        "sidekick_stop",
+        "subagent_stop",
         {
             "agent_id": agent_id,
             "agent_type": agent_type,
@@ -1454,7 +1450,7 @@ def record_sidekick_stop(store: EvidenceStore, hook_input: dict[str, Any]) -> No
         },
     )
     telemetry.record(
-        "sidekick",
+        "subagent",
         repo=repo,
         session_id=session_id,
         phase="stop",
@@ -1518,10 +1514,10 @@ def build_episode(
         for e in events
         if e["kind"] == "assistant_stop" and e["payload"].get("text")
     ]
-    sidekick_outcomes = [
+    subagent_outcomes = [
         redact(e["payload"].get("final_message", "")).strip()
         for e in events
-        if e["kind"] == "sidekick_stop" and e["payload"].get("final_message")
+        if e["kind"] in {"subagent_stop", "sidekick_stop"} and e["payload"].get("final_message")
     ]
     tools = [
         e["payload"] for e in events if e["kind"] in {"tool_result", "tool_failure"}
@@ -1602,7 +1598,7 @@ def build_episode(
                         }
                     )
             pending_user_messages = []
-        elif event["kind"] == "sidekick_stop":
+        elif event["kind"] in {"subagent_stop", "sidekick_stop"}:
             pass
     extraction_messages.extend(pending_user_messages)
 
@@ -1618,7 +1614,7 @@ def build_episode(
         "assistant_conclusion": conclusion,
         "user_messages": prompts,
         "assistant_outcomes": assistant_conclusions,
-        "sidekick_outcomes": sidekick_outcomes,
+        "subagent_outcomes": subagent_outcomes,
         "extraction_messages": extraction_messages,
         "files_read": read_paths[:50],
         "files_modified": modified_paths[:50],
@@ -1807,6 +1803,34 @@ def extraction_message_batches(
     return batches
 
 
+# Platform surface attribution. Read from the generated per-host module so a new
+# entrypoint is correct without remembering to configure anything.
+try:  # pragma: no cover - absent only in the un-built shared source tree
+    from _harness_id import PLATFORM_APPLICATION as _PLATFORM_APPLICATION
+    from _harness_id import PLATFORM_SOURCE as _PLATFORM_SOURCE
+except ImportError:
+    _PLATFORM_SOURCE = "MEM0_PLUGIN"
+    _PLATFORM_APPLICATION = ""
+
+
+def platform_headers(key: str) -> dict[str, str]:
+    """Auth plus the three surface-identity headers.
+
+    X-Mem0-Source and X-Application are set-once by contract: this is the
+    outermost layer, so it sets them, and nothing below may overwrite them.
+    X-Mem0-Client is append-only — anything downstream adds itself to the tail.
+    """
+    headers = {
+        "Authorization": f"Token {key}",
+        "Content-Type": "application/json",
+        "X-Mem0-Source": _PLATFORM_SOURCE,
+        "X-Mem0-Client": f"mem0-plugin/{PLUGIN_VERSION}",
+    }
+    if _PLATFORM_APPLICATION:
+        headers["X-Application"] = _PLATFORM_APPLICATION
+    return headers
+
+
 def _request_json(
     url: str, key: str, payload: dict[str, Any], timeout: float
 ) -> tuple[dict[str, Any] | list[Any], int, int]:
@@ -1814,7 +1838,7 @@ def _request_json(
     request = urllib.request.Request(
         url,
         data=raw,
-        headers={"Authorization": f"Token {key}", "Content-Type": "application/json"},
+        headers=platform_headers(key),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -1841,7 +1865,7 @@ def _get_json(
 ) -> tuple[dict[str, Any] | list[Any], int]:
     request = urllib.request.Request(
         url,
-        headers={"Authorization": f"Token {key}", "Content-Type": "application/json"},
+        headers=platform_headers(key),
         method="GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -1987,6 +2011,13 @@ def flush_session(
         "user_id": write_user,
         "app_id": repo.app_id,
         "run_id": session_id,
+        # Top level, not metadata: the backend reads `source` from the body or
+        # the query string, never from metadata, which is where this used to
+        # sit. The X-Mem0-Source header is also read, but only from the
+        # platform release that ships alongside this change, so the body value
+        # is what makes attribution work on both. The harness tag stays in
+        # metadata as hook provenance.
+        "source": _PLATFORM_SOURCE,
         "metadata": {**metadata, "author": write_user, "dirs": directory_chain(repo)},
         "agent_custom_instructions": PROJECT_MEMORY_INSTRUCTIONS,
         "custom_instructions": PERSONAL_MEMORY_INSTRUCTIONS,
@@ -2529,7 +2560,7 @@ def _collect_memory_ids(
 def _delete_memory(api_url: str, key: str, memory_id: str) -> bool:
     request = urllib.request.Request(
         f"{api_url}/v1/memories/{urllib.parse.quote(memory_id)}/",
-        headers={"Authorization": f"Token {key}", "Content-Type": "application/json"},
+        headers=platform_headers(key),
         method="DELETE",
     )
     try:

@@ -24,6 +24,7 @@ from mem0.configs.prompts import (
 )
 from mem0.exceptions import LLMError
 from mem0.exceptions import ValidationError as Mem0ValidationError
+from mem0.exceptions import VectorStoreError
 from mem0.memory.base import MemoryBase
 from mem0.memory.notices import (
     PERFORMANCE_SLOW_QUERY_THRESHOLD_SECONDS,
@@ -997,6 +998,8 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
                 suggestion="Convert your input to a string, dictionary, or list of dictionaries.",
             )
 
+        # TODO: Remove procedural-memory support in a future breaking release.
+        # Remove memory_type and its helpers from Memory and AsyncMemory together.
         if agent_id is not None and memory_type == MemoryType.PROCEDURAL.value:
             results = self._create_procedural_memory(messages, metadata=processed_metadata, prompt=prompt)
             scale_threshold_notice = detect_scale_threshold_from_add_result(self, results)
@@ -1221,19 +1224,31 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         all_ids = [r[0] for r in records]
         all_payloads = [r[3] for r in records]
 
+        # Only records confirmed to be stored make it into history, entity
+        # links, and the returned results — a record the store rejected must
+        # never be reported back as a successful ADD.
+        persisted_records = []
         try:
             self.vector_store.insert(
                 vectors=all_vectors,
                 ids=all_ids,
                 payloads=all_payloads,
             )
+            persisted_records = records
         except Exception:
             # Fallback: insert one by one
-            for mid, vec, pay in zip(all_ids, all_vectors, all_payloads):
+            for rec in records:
                 try:
-                    self.vector_store.insert(vectors=[vec], ids=[mid], payloads=[pay])
+                    self.vector_store.insert(vectors=[rec[2]], ids=[rec[0]], payloads=[rec[3]])
+                    persisted_records.append(rec)
                 except Exception as e:
-                    logger.error(f"Failed to insert memory {mid}: {e}")
+                    logger.error(f"Failed to insert memory {rec[0]}: {e}")
+
+        if not persisted_records:
+            self.db.save_messages(messages, session_scope)
+            raise VectorStoreError(
+                f"Failed to insert any of the {len(records)} extracted memories into the vector store"
+            )
 
         # Batch history
         history_records = [
@@ -1245,7 +1260,7 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
                 "created_at": r[3].get("created_at"),
                 "is_deleted": 0,
             }
-            for r in records
+            for r in persisted_records
         ]
         try:
             self.db.batch_add_history(history_records)
@@ -1259,12 +1274,12 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
 
         # Phase 7: Batch entity linking
         try:
-            all_texts = [r[1] for r in records]
+            all_texts = [r[1] for r in persisted_records]
             all_entities = extract_entities_batch(all_texts)
 
             # 7a: Global dedup — collect unique entities across all memories
             global_entities = {}  # normalized_key -> (entity_type, entity_text, set of memory_ids)
-            for idx, (memory_id, text, embedding, payload) in enumerate(records):
+            for idx, (memory_id, text, embedding, payload) in enumerate(persisted_records):
                 entities = all_entities[idx] if idx < len(all_entities) else []
                 for entity_type, entity_text in entities:
                     key = self._normalize_entity_text(entity_text)
@@ -1364,13 +1379,15 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
         except Exception as e:
             logger.warning(f"Batch entity linking failed: {e}")
 
-        for memory_id, text, _, _ in records:
+        for memory_id, text, _, _ in persisted_records:
             self._publish_graph_event(graph_events[memory_id], memory_text=text)
 
         # Phase 8: Save messages + return
         self.db.save_messages(messages, session_scope)
 
-        returned_memories = resolved_memories + [{"id": r[0], "memory": r[1], "event": "ADD"} for r in records]
+        returned_memories = resolved_memories + [
+            {"id": r[0], "memory": r[1], "event": "ADD"} for r in persisted_records
+        ]
 
         keys, encoded_ids = process_telemetry_filters(filters)
         capture_event(
@@ -2371,6 +2388,13 @@ class Memory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, Memory
             self.relationship_graph.close()
             self.relationship_graph = None
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")
 
@@ -2727,6 +2751,8 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
                 suggestion="Convert your input to a string, dictionary, or list of dictionaries.",
             )
 
+        # TODO: Remove procedural-memory support in a future breaking release.
+        # Remove memory_type and its helpers from Memory and AsyncMemory together.
         if agent_id is not None and memory_type == MemoryType.PROCEDURAL.value:
             results = await self._create_procedural_memory(
                 messages, metadata=processed_metadata, prompt=prompt, llm=llm
@@ -2964,6 +2990,10 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         all_ids = [r[0] for r in records]
         all_payloads = [r[3] for r in records]
 
+        # Only records confirmed to be stored make it into history, entity
+        # links, and the returned results — a record the store rejected must
+        # never be reported back as a successful ADD.
+        persisted_records = []
         try:
             await asyncio.to_thread(
                 self.vector_store.insert,
@@ -2971,12 +3001,22 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
                 ids=all_ids,
                 payloads=all_payloads,
             )
+            persisted_records = records
         except Exception:
-            for mid, vec, pay in zip(all_ids, all_vectors, all_payloads):
+            for rec in records:
                 try:
-                    await asyncio.to_thread(self.vector_store.insert, vectors=[vec], ids=[mid], payloads=[pay])
+                    await asyncio.to_thread(
+                        self.vector_store.insert, vectors=[rec[2]], ids=[rec[0]], payloads=[rec[3]]
+                    )
+                    persisted_records.append(rec)
                 except Exception as e:
-                    logger.error(f"Failed to insert memory {mid} (async): {e}")
+                    logger.error(f"Failed to insert memory {rec[0]} (async): {e}")
+
+        if not persisted_records:
+            await asyncio.to_thread(self.db.save_messages, messages, session_scope)
+            raise VectorStoreError(
+                f"Failed to insert any of the {len(records)} extracted memories into the vector store"
+            )
 
         # Batch history
         history_records = [
@@ -2988,7 +3028,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
                 "created_at": r[3].get("created_at"),
                 "is_deleted": 0,
             }
-            for r in records
+            for r in persisted_records
         ]
         try:
             await asyncio.to_thread(self.db.batch_add_history, history_records)
@@ -3008,12 +3048,12 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
 
         # Phase 7: Batch entity linking
         try:
-            all_texts = [r[1] for r in records]
+            all_texts = [r[1] for r in persisted_records]
             all_entities = await asyncio.to_thread(extract_entities_batch, all_texts)
 
             # 7a: Global dedup
             global_entities = {}
-            for idx, (memory_id, text, embedding, payload) in enumerate(records):
+            for idx, (memory_id, text, embedding, payload) in enumerate(persisted_records):
                 entities = all_entities[idx] if idx < len(all_entities) else []
                 for entity_type, entity_text in entities:
                     key = self._normalize_entity_text(entity_text)
@@ -3112,7 +3152,7 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         except Exception as e:
             logger.warning(f"Batch entity linking failed (async): {e}")
 
-        for memory_id, text, _, _ in records:
+        for memory_id, text, _, _ in persisted_records:
             await asyncio.to_thread(
                 self._publish_graph_event,
                 graph_events[memory_id],
@@ -3122,7 +3162,9 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         # Phase 8: Save messages + return
         await asyncio.to_thread(self.db.save_messages, messages, session_scope)
 
-        returned_memories = resolved_memories + [{"id": r[0], "memory": r[1], "event": "ADD"} for r in records]
+        returned_memories = resolved_memories + [
+            {"id": r[0], "memory": r[1], "event": "ADD"} for r in persisted_records
+        ]
 
         keys, encoded_ids = process_telemetry_filters(effective_filters)
         capture_event(
@@ -4172,6 +4214,13 @@ class AsyncMemory(_RelationshipGraphSearchMixin, _RelationshipGraphWriteMixin, M
         if getattr(self, "relationship_graph", None) is not None:
             self.relationship_graph.close()
             self.relationship_graph = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
     async def chat(self, query):
         raise NotImplementedError("Chat function not implemented yet.")

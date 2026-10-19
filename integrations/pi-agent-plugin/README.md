@@ -4,15 +4,19 @@ Persistent semantic memory for [Pi Agent](https://pi.dev), powered by [Mem0](htt
 
 This extension gives Pi Agent long-term memory that persists across sessions, projects, and devices. Memories are automatically captured from conversations and can be searched and managed through slash commands and an agent-accessible tool.
 
+Current package version: `0.3.0`. Shared redaction and lifecycle utilities come from [agent-plugin-core](../agent-plugin-core/README.md); Pi keeps its own tools and scopes.
+
+Sidekick is available only in the [Claude Code plugin](../claude-code-plugin/README.md#sonnet-sidekick-agent).
+
 ## Features
 
-- **Automatic memory capture** — learns from every conversation (both user and assistant messages)
-- **Semantic search** — find memories by meaning, not just keywords
-- **Scoped memory** — project, session, or global scope
-- **Monorepo-aware** — uses git root for project detection, consistent app_id across subdirectories
-- **Confirmation dialogs** — destructive commands ask before acting
-- **6 slash commands** — essential memory management from the command line
-- **Agent tool** — `mem0_memory` tool lets the agent search and store memories autonomously
+- **Automatic memory capture**: learns from every conversation (both user and assistant messages)
+- **Semantic search**: find memories by meaning, not just keywords
+- **Scoped memory**: project, session, or global scope
+- **Monorepo-aware**: uses git root for project detection, consistent app_id across subdirectories
+- **Confirmation dialogs**: destructive commands ask before acting
+- **6 slash commands**: essential memory management from the command line
+- **Agent tool**: `mem0_memory` tool lets the agent search and store memories autonomously
 
 ## Setup
 
@@ -67,7 +71,7 @@ The plugin includes 6 skills that guide the agent on how to use each capability:
 
 | Skill | Purpose |
 |-------|---------|
-| `context-loader` | Pre-fetch relevant memories at session start |
+| `context-loader` | Search memories when earlier work may already explain the task |
 | `remember` | Store facts with category classification |
 | `search` | Quick semantic search with compact results |
 | `forget` | Delete memories with confirmation |
@@ -79,10 +83,18 @@ The plugin includes 6 skills that guide the agent on how to use each capability:
 | Scope | Filters | Use case |
 |-------|---------|----------|
 | `project` | user + app_id (git root) | Default. Project-specific knowledge |
-| `session` | user + app_id + run_id | Ephemeral, session-only context |
+| `session` | user + app_id + run_id | Recall restricted to memories saved with the current session ID |
 | `global` | user only | All memories across all your projects |
 
 Project scoping uses `git rev-parse --show-toplevel` to detect the repository root, so all subdirectories within a monorepo share the same memory pool.
+
+Global tool operations require `/mem0-scope global` or `defaultScope: "global"` in plugin configuration. A model-supplied `scope` argument cannot enable cross-project access on its own. Empty or wildcard user, project, and session identities are rejected.
+
+## Automatic recall and capture
+
+Before an agent response, the extension searches project memories and injects relevant results. After `agent_end`, automatic capture sends the user and assistant text supplied by Pi to Mem0 in **project** scope, regardless of the default scope selected for explicit commands. Captured text is redacted without the former 6,000-character per-message cutoff.
+
+Automatic project writes do not attach `run_id`. Session-scoped recall applies to memories explicitly saved in session scope; it does not make project memories session-specific or automatically expire them. Recall queries and displayed tool results keep separate size limits.
 
 ## Memory Categories
 
@@ -132,5 +144,3 @@ pnpm run build        # Build (ESM + declarations)
 ## License
 
 [Apache-2.0](LICENSE)
-
-Global tool operations require `/mem0-scope global` or `defaultScope: "global"` in plugin configuration. A model-supplied `scope` argument cannot enable cross-project access on its own. Empty or wildcard user, project, and session identities are rejected.

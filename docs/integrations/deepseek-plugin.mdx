@@ -7,6 +7,8 @@ Add persistent memory to the [**DeepSeek Harness**](https://github.com/deepseek-
 
 <Info>Current package version: `0.3.0`.</Info>
 
+Sidekick is available only in the [Claude Code plugin](/integrations/claude-code#sidekick-agent).
+
 ## Overview
 
 The plugin provides automatic memory plus two agent-callable tools:
@@ -18,7 +20,7 @@ The plugin provides automatic memory plus two agent-callable tools:
 | `search_memory` | Recall facts from Mem0 relevant to a query |
 | `add_memory` | Store a fact in Mem0 for future sessions |
 
-Unlike file-based memory plugins, Mem0 is a managed backend: server-side extraction, semantic dedup, and conflict resolution, with the same memory reusable across every agent you connect.
+Unlike file-based memory plugins, Mem0 is a managed backend: server-side extraction, semantic dedup, and conflict resolution, with memories reusable by integrations that use compatible user identities and search filters.
 
 ## How it works
 
@@ -108,11 +110,11 @@ For a Mem0 Platform on-prem or dedicated deployment, point `config.host` at that
 | `autoRecall` | no | `true` | Recall relevant memory before model requests |
 | `autoCapture` | no | `true` | Store completed human and assistant turns |
 
-Both tools also accept optional per-call `userId`, `agentId`, and `runId` params so a single install can partition memory by entity, agent, or session; when omitted they fall back to the configured `userId`.
+Both tools also accept optional per-call `userId`, `agentId`, and `runId` params so a single install can partition memory by entity, agent, or session; `userId` defaults to the configured user, while `agentId` and `runId` are omitted unless supplied. Automatic recall and capture use the configured user without an agent, repository, or session filter. Automatic capture preserves full redacted user and assistant message text without a per-message character cutoff.
 
 ## Telemetry
 
-Writes are tagged `source="DEEPSEEK_HARNESS"` so Mem0 can attribute usage to this integration. Anonymous usage events include operation names, durations, result counts, and coarse failure kinds. Queries, memory text, entity IDs, and API keys are never included. Set `MEM0_TELEMETRY=false` to opt out.
+Writes are tagged `source="DEEPSEEK_HARNESS"` so Mem0 can attribute usage to this integration. Usage events include operation names, durations, result counts, and coarse failure kinds. They are **not anonymous**: when an API key is configured they are sent under your Mem0 account email, the same way the SDK attributes its own. Queries, memory text, entity IDs, and API keys are never included. Set `MEM0_TELEMETRY=false` to opt out.
 
 <Note>
   This plugin is a developer preview and tracks the evolving DeepSeek Harness plugin API.

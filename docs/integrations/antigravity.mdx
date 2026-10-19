@@ -7,6 +7,8 @@ Add persistent memory to [**Google Antigravity**](https://antigravity.google) (`
 
 <Info>Current plugin version: `0.3.1`.</Info>
 
+Sidekick is available only in the [Claude Code plugin](/integrations/claude-code#sidekick-agent).
+
 ## Prerequisites
 
 1. A Mem0 API key (starts with `m0-`):
@@ -48,11 +50,10 @@ This installs the generated Antigravity bundle with the Mem0 server, lifecycle h
 | Local MCP Server (`search_memories`) | Yes |
 | Lifecycle Hooks | Yes |
 | 6 Memory Skills | Yes |
-| Sidekick Agent | Yes |
 
 ## Memory tools and skills
 
-The full plugin exposes a focused `search_memories` tool and captures completed work through lifecycle hooks. Six skills provide search, status, remember, forget, pause, and resume workflows. A native sidekick can handle a bounded task in the workspace assigned by Antigravity; it does not claim Claude Code worktree isolation.
+The full plugin exposes a focused `search_memories` tool and captures completed work through lifecycle hooks. Six skills provide search, status, remember, forget, pause, and resume workflows.
 
 If you need the full set of direct CRUD tools, connect the [hosted Mem0 MCP server](/platform/mem0-mcp) separately instead of installing both configurations under the same server name.
 
@@ -78,7 +79,7 @@ The plugin translates Antigravity events into the shared Mem0 capture lifecycle.
 |------|-------|-------------|
 | **Invocation** | `PreInvocation` | Initializes the first invocation and recovers pending capture |
 | **Post-tool** | `PostToolUse` | Records useful tool results and failures |
-| **Stop** | `Stop` | Captures the completed exchange for a later session |
+| **Stop** | `Stop` | Reads completed transcript messages and starts a background flush |
 
 Recall is explicit through `search_memories` and the search skill. The current Antigravity adapter does not inject query-specific memory during `PreInvocation` because that event does not include the user's prompt.
 
@@ -105,6 +106,12 @@ MEM0_CWD="$PWD" agy
 ```
 
 The adapter uses `MEM0_CWD` only when Antigravity omits the workspace. If neither value is available, it skips recall and capture instead of writing memories under an incorrect repository scope.
+
+## Search and capture
+
+The local `search_memories` tool accepts `query`, `top_k`, `category`, `scope` (`repo`, `dir`, or `mine`), and optional `run_id` with every scope. Use a known session ID to recall memories saved in that session; omit it to search across sessions. See [search scopes](/integrations/claude-code#search-scope) for the shared Python search contract, including legacy repository memory compatibility.
+
+Captured prompts and responses retain their full redacted text without a per-message character cutoff. Large extraction inputs are split across requests without dropping message text; recall output and tool-result previews have separate limits.
 
 ## Troubleshooting
 

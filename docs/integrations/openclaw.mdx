@@ -7,6 +7,8 @@ Add long-term memory to [OpenClaw](https://github.com/openclaw/openclaw) agents 
 
 <Info>Current package version: `1.1.0`.</Info>
 
+Sidekick is available only in the [Claude Code plugin](/integrations/claude-code#sidekick-agent). OpenClaw subagents can recall parent memories. Mem0 does not capture their sessions.
+
 ## Overview
 
 <Frame>
@@ -343,8 +345,8 @@ openclaw mem0 status --json
 |-----|------|---------|-------------|
 | `mode` | `"platform"` \| `"open-source"` | `"platform"` | Which backend to use |
 | `userId` | `string` | OS username | Scope memories per user |
-| `autoRecall` | `boolean` | `true` | Inject memories before each turn. Ignored when `skills` is configured. |
-| `autoCapture` | `boolean` | `true` | Store facts after each turn. Ignored when `skills` is configured. |
+| `autoRecall` | `boolean` | `true` | Inject memories before each turn, including when skills mode is configured. |
+| `autoCapture` | `boolean` | `true` | Store facts after each turn, including when skills mode is configured. |
 | `topK` | `number` | `5` | Max memories per recall |
 | `searchThreshold` | `number` | `0.3` | Min similarity (0–1) |
 
@@ -443,7 +445,7 @@ If `openclaw plugins update` fails:
 
 ### Auto-Capture and Auto-Recall
 
-Auto-capture and auto-recall are **enabled by default**. When skills mode is configured (the default after `openclaw mem0 init`), these are ignored in favor of the skills-based triage and recall protocol.
+Auto-capture and auto-recall are **enabled by default**. They also run when skills mode is configured (the default after `openclaw mem0 init`). Set `autoRecall` or `autoCapture` to `false` to disable the corresponding automatic hook while using skills.
 
 To disable either:
 
@@ -479,7 +481,9 @@ Plugin config is stored in `~/.openclaw/openclaw.json` with file permissions `0o
 
 ### Telemetry
 
-Anonymous usage telemetry (PostHog) is enabled by default to help improve the plugin. No conversation content or memory values are included, only event counts (recall, capture, tool usage, CLI commands).
+Usage telemetry (PostHog) is enabled by default to help improve the plugin. No conversation content or memory values are included, only event counts (recall, capture, tool usage, CLI commands).
+
+These events are **not anonymous**. OpenClaw does not send your account email the way the SDK does, but it does send an unsalted SHA-256 hash of it, falling back to a hash of the API key and then to a random per-machine id. Mem0 holds the email the hash is derived from, so the hash identifies your account rather than concealing it. The first run that resolves an account also emits a PostHog `$identify`, which permanently merges any earlier random id into that identity.
 
 To opt out, set the environment variable:
 
