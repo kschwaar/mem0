@@ -32,9 +32,7 @@ class _MemoryAPIHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
         payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-        self.server.request_log.append(
-            {"method": "POST", "path": path, "body": payload}
-        )
+        self.server.request_log.append({"method": "POST", "path": path, "body": payload})
         if path == "/v3/memories/":
             filters = payload.get("filters") or {}
             if not any(filters.get(key) for key in ("user_id", "agent_id", "run_id")):
@@ -49,14 +47,15 @@ class _MemoryAPIHandler(BaseHTTPRequestHandler):
                 )
                 return
             results = [
-                memory for memory in self.server.memories
+                memory
+                for memory in self.server.memories
                 if all(memory.get(key) == value for key, value in filters.items())
             ]
             query = parse_qs(urlsplit(self.path).query)
             page = int(query.get("page", ["1"])[0])
             page_size = int(query.get("page_size", ["100"])[0])
             start = (page - 1) * page_size
-            self._respond(200, {"results": results[start:start + page_size]})
+            self._respond(200, {"results": results[start : start + page_size]})
             return
         if path != "/v3/memories/add/":
             self.send_error(404)
@@ -107,9 +106,7 @@ class _MemoryAPIHandler(BaseHTTPRequestHandler):
 
 
 class _LoopbackAPI:
-    def __init__(
-        self, base_url: str, requests: list[dict], memories: list[dict]
-    ) -> None:
+    def __init__(self, base_url: str, requests: list[dict], memories: list[dict]) -> None:
         self.base_url = base_url
         self.requests = requests
         self.memories = memories
@@ -139,9 +136,7 @@ def loopback_api():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield _LoopbackAPI(
-            f"http://127.0.0.1:{server.server_port}", requests, memories
-        )
+        yield _LoopbackAPI(f"http://127.0.0.1:{server.server_port}", requests, memories)
     finally:
         server.shutdown()
         server.server_close()
@@ -369,7 +364,8 @@ def test_scoped_delete_preview_counts_all_pages_without_deleting(
     protected_ids = [memory["id"] for memory in loopback_api.memories]
 
     result = _run_cli(
-        tmp_path, loopback_api,
+        tmp_path,
+        loopback_api,
         ["--json", "delete", "--all", "--user-id", "alice", "--dry-run", "--force"],
     )
 
@@ -401,7 +397,6 @@ def test_single_delete_json_dry_run_returns_preview_without_deleting(
     assert envelope["data"]["memory"] == "protected target memory"
 
 
-
 def test_entity_delete_json_dry_run_returns_preview_without_deleting(
     tmp_path: Path, loopback_api: _LoopbackAPI
 ) -> None:
@@ -428,7 +423,6 @@ def test_entity_delete_json_dry_run_returns_preview_without_deleting(
     assert envelope["data"]["dry_run"] is True
 
 
-
 def test_project_delete_json_dry_run_previews_scope_without_reading_or_deleting(
     tmp_path: Path, loopback_api: _LoopbackAPI
 ) -> None:
@@ -453,7 +447,6 @@ def test_project_delete_json_dry_run_previews_scope_without_reading_or_deleting(
         "target-memory-id",
         "sentinel-memory-id",
     ]
-
 
 
 def test_project_delete_text_dry_run_does_not_delete(

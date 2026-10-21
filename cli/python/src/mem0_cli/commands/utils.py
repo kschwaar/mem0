@@ -183,4 +183,3 @@ def cmd_import(
         print_error(err_console, message)
     if total_failure:
         raise typer.Exit(1)
-

@@ -120,6 +120,11 @@ and dashboard. Explicit loopback HTTP origins use a non-Secure refresh cookie
 for local login/refresh. HTTPS and non-loopback origins keep Secure cookies;
 set `DASHBOARD_URL` to the public HTTPS origin when using a reverse proxy.
 
+The dashboard image installs with pnpm's frozen lockfile and includes
+`dashboard/pnpm-workspace.yaml` before dependency installation so its overrides
+are enforced. Keep the manifest, workspace policy, and lockfile in sync; a
+mismatch must fail the image build rather than silently resolve new versions.
+
 ## Local Memory Profile
 
 The default Docker Compose stack uses Postgres/pgvector. For a heavier local
