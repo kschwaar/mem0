@@ -50,3 +50,49 @@ test-py-3.11:
 
 test-py-3.12:
 	hatch run dev_py_3_12:test
+
+# Focused offline/loopback regressions; no running Mem0 or model service required.
+PYTHON ?= python3
+PNPM ?= pnpm
+QUICK_LOOPBACK_ARTIFACTS ?= /tmp/mem0-quick-loopback
+QUICK_LOOPBACK_REPORT_DIR := $(abspath $(QUICK_LOOPBACK_ARTIFACTS))
+QUICK_LOOPBACK_PYTEST_ARGS ?=
+QUICK_LOOPBACK_VITEST_ARGS ?=
+
+.PHONY: test-quick-loopback test-quick-loopback-python test-quick-loopback-node test-quick-loopback-plugin test-quick-loopback-server test-quick-loopback-dashboard
+
+test-quick-loopback:
+	@status=0; \
+	for suite in python node plugin server dashboard; do \
+		$(MAKE) --no-print-directory test-quick-loopback-$$suite || status=1; \
+	done; \
+	printf '\nQuick-loopback reports: %s\n' "$(QUICK_LOOPBACK_REPORT_DIR)"; \
+	exit $$status
+
+test-quick-loopback-python:
+	@mkdir -p "$(QUICK_LOOPBACK_REPORT_DIR)"
+	PYTHONPATH="$(CURDIR)/cli/python/src" $(PYTHON) -m pytest \
+		-c cli/python/pyproject.toml cli/python/tests/test_quick_loopback.py \
+		-ra --junitxml="$(QUICK_LOOPBACK_REPORT_DIR)/python-cli.xml" $(QUICK_LOOPBACK_PYTEST_ARGS)
+
+test-quick-loopback-node:
+	@mkdir -p "$(QUICK_LOOPBACK_REPORT_DIR)"
+	$(PNPM) --dir cli/node exec vitest run tests/quick_loopback.test.ts \
+		--reporter=default --reporter=junit \
+		--outputFile="$(QUICK_LOOPBACK_REPORT_DIR)/node-cli.xml" $(QUICK_LOOPBACK_VITEST_ARGS)
+
+test-quick-loopback-plugin:
+	@mkdir -p "$(QUICK_LOOPBACK_REPORT_DIR)"
+	$(PYTHON) -m pytest integrations/agent-plugin-core/tests/test_quick_loopback.py \
+		-ra --junitxml="$(QUICK_LOOPBACK_REPORT_DIR)/plugin.xml" $(QUICK_LOOPBACK_PYTEST_ARGS)
+
+test-quick-loopback-server:
+	$(MAKE) --no-print-directory -C server test-quick-loopback \
+		QUICK_LOOPBACK_ARTIFACTS="$(QUICK_LOOPBACK_REPORT_DIR)" \
+		QUICK_LOOPBACK_PYTEST_ARGS="$(QUICK_LOOPBACK_PYTEST_ARGS)"
+
+test-quick-loopback-dashboard:
+	@mkdir -p "$(QUICK_LOOPBACK_REPORT_DIR)"
+	node --test --test-reporter=spec --test-reporter-destination=stdout \
+		--test-reporter=junit --test-reporter-destination="$(QUICK_LOOPBACK_REPORT_DIR)/dashboard.xml" \
+		server/dashboard/tests/*.test.mjs

@@ -541,6 +541,7 @@ export async function cmdDelete(
 ): Promise<void> {
 	setCurrentCommand("delete");
 	if (opts.dryRun) {
+		const start = performance.now();
 		let mem: Record<string, unknown>;
 		try {
 			mem = await backend.get(memoryId);
@@ -548,9 +549,26 @@ export async function cmdDelete(
 			printError(e instanceof Error ? e.message : String(e));
 			process.exit(1);
 		}
-		const text = (mem.memory ?? mem.text ?? "") as string;
-		printInfo(`Would delete memory ${memoryId.slice(0, 8)}: ${text}`);
-		printInfo("No changes made.");
+		const elapsed = (performance.now() - start) / 1000;
+		const preview = {
+			dry_run: true,
+			id: memoryId,
+			memory: (mem.memory ?? mem.text ?? "") as string,
+		};
+		if (opts.output === "agent") {
+			formatAgentEnvelope({
+				command: "delete",
+				data: preview,
+				durationMs: Math.round(elapsed * 1000),
+			});
+		} else if (opts.output === "json") {
+			formatJson(preview);
+		} else {
+			printInfo(
+				`Would delete memory ${memoryId.slice(0, 8)}: ${preview.memory}`,
+			);
+			printInfo("No changes made.");
+		}
 		return;
 	}
 
@@ -600,9 +618,72 @@ export async function cmdDeleteAll(
 		printError("Destructive operation requires --force in agent mode.");
 		process.exit(1);
 	}
+	if (opts.dryRun) {
+		const scope = opts.all
+			? { project: "true" }
+			: {
+					user_id: opts.userId,
+					agent_id: opts.agentId,
+					app_id: opts.appId,
+					run_id: opts.runId,
+				};
+		if (opts.all) {
+			if (opts.output === "agent") {
+				formatAgentEnvelope({
+					command: "delete-all",
+					data: { dry_run: true },
+					scope,
+				});
+			} else if (opts.output === "json") {
+				formatJson({ dry_run: true, scope });
+			} else {
+				printInfo("Would delete all memories across the project.");
+				printInfo("No changes made.");
+			}
+			return;
+		}
+
+		const start = performance.now();
+		let count = 0;
+		let page = 1;
+		const pageSize = 100;
+		try {
+			for (;;) {
+				const memories = await backend.listMemories({
+					userId: opts.userId,
+					agentId: opts.agentId,
+					appId: opts.appId,
+					runId: opts.runId,
+					page,
+					pageSize,
+				});
+				count += memories.length;
+				if (memories.length < pageSize) break;
+				page++;
+			}
+		} catch (e) {
+			printError(e instanceof Error ? e.message : String(e));
+			process.exit(1);
+		}
+		const elapsed = (performance.now() - start) / 1000;
+		if (opts.output === "agent") {
+			formatAgentEnvelope({
+				command: "delete-all",
+				data: { dry_run: true },
+				count,
+				scope,
+				durationMs: Math.round(elapsed * 1000),
+			});
+		} else if (opts.output === "json") {
+			formatJson({ dry_run: true, count, scope });
+		} else {
+			printInfo(`Would delete ${count} memories.`);
+			printInfo("No changes made.");
+		}
+		return;
+	}
 	if (opts.all) {
 		// Project-wide wipe using wildcard entity IDs
-		// Note: --dry-run is ignored here because the API has no count-before-delete endpoint.
 
 		if (!opts.force) {
 			const readline = await import("node:readline");
@@ -661,24 +742,6 @@ export async function cmdDeleteAll(
 				printSuccess(`All project memories deleted (${elapsed.toFixed(2)}s)`);
 			}
 		}
-		return;
-	}
-
-	if (opts.dryRun) {
-		let memories: Record<string, unknown>[];
-		try {
-			memories = await backend.listMemories({
-				userId: opts.userId,
-				agentId: opts.agentId,
-				appId: opts.appId,
-				runId: opts.runId,
-			});
-		} catch (e) {
-			printError(e instanceof Error ? e.message : String(e));
-			process.exit(1);
-		}
-		printInfo(`Would delete ${memories.length} memories.`);
-		printInfo("No changes made.");
 		return;
 	}
 

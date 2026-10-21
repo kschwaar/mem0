@@ -568,6 +568,16 @@ async def _handle_fastmcp_streamable_http(request: Request) -> Response:
     if StreamableHTTPServerTransport is None or mcp is None:
         raise RuntimeError("FastMCP is not available")
 
+    # This endpoint is stateless and returns JSON for POST requests. It has no
+    # unsolicited server messages, so decline the optional GET event stream
+    # rather than buffering an unbounded SSE response before sending headers.
+    if request.method == "GET":
+        return JSONResponse(
+            status_code=405,
+            content={"detail": "This stateless MCP endpoint supports POST requests only."},
+            headers={"Allow": "POST"},
+        )
+
     response_started = False
     response_status = 200
     response_headers: list[tuple[bytes, bytes]] = []

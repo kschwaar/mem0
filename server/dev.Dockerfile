@@ -1,4 +1,4 @@
-FROM python:3.12
+FROM python:3.12 AS dependencies
 
 WORKDIR /app
 
@@ -20,6 +20,8 @@ COPY poetry.lock .
 COPY README.md .
 COPY mem0 ./mem0
 RUN pip install -e .[graph]
+
+FROM dependencies AS development
 
 # Return to app directory and copy server code
 WORKDIR /app

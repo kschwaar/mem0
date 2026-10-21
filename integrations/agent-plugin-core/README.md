@@ -31,6 +31,8 @@ TypeScript integrations (`openclaw`, `opencode-plugin`, `pi-agent-plugin`, and `
 
 The six Python packages use the same `search_memories` MCP tool and six skill templates. Native hooks collect conversations and flush them to Mem0 in the background. The portable package uses the Agent Plugins v1 layout so compatible hosts can load its MCP server and skills. It has no lifecycle hooks or flush worker; its bundled `remember` skill assumes automatic capture and cannot save a memory on its own.
 
+At the MCP boundary, a search that fails—including an upstream HTTP/API failure—is returned as a tool error (`isError: true`) with a generic message. A successful search with no matching memories remains a normal result (`isError: false`). The MCP server stays protocol-correct and may exit normally after either result.
+
 Python search accepts `query`, `top_k`, `category`, `scope`, and optional `run_id`:
 
 | Scope | Memories searched |

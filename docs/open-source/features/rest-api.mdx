@@ -146,6 +146,14 @@ Auth is on by default. Protected endpoints require either a JWT (from the dashbo
 
 The `/docs` OpenAPI explorer supports both auth modes. Click **Authorize** at the top of the page and paste either `Bearer <access_token>` (JWT) or your `X-API-Key` value. Protected endpoints return `401` until you authorize.
 
+For the local Compose dashboard, `DASHBOARD_URL` defaults to
+`http://localhost:3000` and is passed to the dashboard container. Explicit
+loopback HTTP origins may use a non-Secure refresh cookie so automatic refresh
+works locally. Set `DASHBOARD_URL` to the public HTTPS origin behind a reverse
+proxy; HTTPS and non-loopback origins retain Secure cookies. Production with no
+configured origin also defaults to Secure. Cookie policy does not trust
+request-supplied forwarding headers.
+
 ### Log in and use a JWT
 
 Register the first admin (only works when no user exists yet), then log in:
@@ -282,6 +290,15 @@ The OSS REST server exposes the following endpoints. None use the `/v1/` prefix.
 | `GET` | `/memories/{memory_id}/history` | Get memory history |
 | `POST` | `/search` | Search memories |
 | `POST` | `/reset` | Reset all memories |
+
+For native `GET /memories/{memory_id}`, a memory that does not exist returns
+HTTP 404. A storage or provider failure returns HTTP 502 instead of being
+reported as a missing memory.
+
+The downstream hosted MCP endpoint accepts authenticated JSON-RPC POST
+requests at `/mcp` and `/mcp/`. It is stateless and returns JSON responses;
+optional GET event streaming and session DELETE are not supported. GET returns
+HTTP 405 with `Allow: POST`, rather than holding a stream open.
 
 For the downstream platform-compatible `DELETE /v1/memories/` route, app-scoped deletion first enumerates matching memories up to a safety limit of 1,000. If enumeration reaches that cap (including exactly 1,000 results), the request returns HTTP 409 without deleting any memories; narrow the scope and retry. Deletions below the cap complete normally.
 

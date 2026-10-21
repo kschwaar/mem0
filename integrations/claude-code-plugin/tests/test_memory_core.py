@@ -2689,7 +2689,7 @@ def test_plugin_mcp_config_starts_the_local_server():
     assert responses[1]["result"]["tools"][0]["name"] == "search_memories"
 
 
-def test_mcp_tool_is_session_independent_and_returns_plain_memories(
+def test_mcp_tool_returns_plain_memory_content_without_internal_metadata(
     isolated_env, monkeypatch
 ):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/tmp/repo")
@@ -2711,35 +2711,26 @@ def test_mcp_tool_is_session_independent_and_returns_plain_memories(
         ],
     )
 
-    with (
-        patch.object(mcp_server, "resolve_repo", return_value=repo()) as resolve,
-        patch.object(mcp_server, "search_memories", return_value=result) as search,
-    ):
-        rendered = mcp_server.call_search_memories(
+    with patch.object(mcp_server, "search_memories", return_value=result):
+        response = mcp_server.handle_request(
             {
-                "query": "parser",
-                "top_k": 5,
-                "category": "project_knowledge",
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_memories",
+                    "arguments": {"query": "parser"},
+                },
             }
         )
 
-    resolve.assert_called_once_with("/tmp/repo")
-    assert search.call_args.args == (None, repo(), None, "parser")
-    assert search.call_args.kwargs == {
-        "top_k": 5,
-        "category": "project_knowledge",
-        "scope": None,
-        "run_id": None,
-        "operation": "mcp-search",
-    }
-    assert rendered == (
-        "1. The parser entrypoint is src/parser.py. "
-        "[learnt on branch feat/parser]"
-    )
-    assert "memory-1" not in rendered
-    assert "0.91" not in rendered
-    assert "project_knowledge" not in rendered
-
+    tool_result = response["result"]
+    assert tool_result["isError"] is False
+    content = "\n".join(item["text"] for item in tool_result["content"] if item["type"] == "text")
+    assert "The parser entrypoint is src/parser.py." in content
+    assert "memory-1" not in content
+    assert "0.91" not in content
+    assert "project_knowledge" not in content
 
 @pytest.mark.parametrize("scope", ["repo", "dir", "mine"])
 def test_mcp_search_passes_run_id_for_every_scope(isolated_env, monkeypatch, scope):

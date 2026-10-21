@@ -81,6 +81,25 @@ export async function cmdStatus(
 	console.log();
 }
 
+function describeImportFailure(error: unknown): string {
+	if (error instanceof Error) {
+		const httpStatus = /\bHTTP (\d{3})\b/.exec(error.message)?.[1];
+		if (httpStatus) return `Memory API request failed with HTTP ${httpStatus}.`;
+
+		switch (error.name) {
+			case "AuthError":
+				return "Authentication failed.";
+			case "NotFoundError":
+				return "Memory API resource was not found.";
+			case "APIError":
+				return "Memory API rejected an import row.";
+			case "TypeError":
+				return "Network request failed while importing.";
+		}
+	}
+	return "All memory rows failed to import.";
+}
+
 export async function cmdImport(
 	backend: Backend,
 	filePath: string,
@@ -99,6 +118,8 @@ export async function cmdImport(
 
 	let added = 0;
 	let failed = 0;
+	let firstFailure: unknown;
+	const machineReadable = opts.output === "agent" || opts.output === "json";
 	const start = performance.now();
 
 	for (let i = 0; i < data.length; i++) {
@@ -116,12 +137,13 @@ export async function cmdImport(
 				metadata: item.metadata as Record<string, unknown> | undefined,
 			});
 			added++;
-		} catch {
+		} catch (error) {
 			failed++;
+			firstFailure ??= error;
 		}
 
 		// Simple progress indicator
-		if ((i + 1) % 10 === 0 || i === data.length - 1) {
+		if (!machineReadable && ((i + 1) % 10 === 0 || i === data.length - 1)) {
 			process.stdout.write(
 				`\r  ${dim(`Importing memories... ${i + 1}/${data.length}`)}`,
 			);
@@ -129,17 +151,24 @@ export async function cmdImport(
 	}
 
 	const elapsed = (performance.now() - start) / 1000;
-	console.log(); // Clear progress line
+	const allFailed = added === 0 && failed > 0;
+	if (!machineReadable) console.log(); // Clear progress line
 
-	if (opts.output === "agent" || opts.output === "json") {
-		formatAgentEnvelope({
+	if (machineReadable) {
+		formatJsonEnvelope({
 			command: "import",
-			data: {
-				added,
-				failed,
-			},
+			data: { added, failed },
 			durationMs: Math.round(elapsed * 1000),
+			status: allFailed ? "error" : "success",
+			error: allFailed ? describeImportFailure(firstFailure) : undefined,
 		});
+		if (allFailed) process.exitCode = 1;
+		return;
+	}
+
+	if (allFailed) {
+		printError(`${failed} memories failed to import.`);
+		process.exitCode = 1;
 		return;
 	}
 

@@ -163,6 +163,58 @@ make test
 
 ---
 
+## Quick offline and loopback regressions
+
+Use this focused lane when repairing the self-hosted API, CLI JSON contracts,
+dashboard refresh-cookie policy, or plugin MCP error handling. It uses pytest,
+Vitest, and Node's built-in test runner with isolated temporary
+configuration and controlled loopback responses. It does not require a running
+Mem0 deployment, database, or LLM service, and does not use your normal API keys.
+
+Prerequisites: Python 3.10+, Node.js and pnpm compatible with `cli/node`, and
+Docker for the server checks. In your development Python environment, install
+the CLI and shared plugin test dependencies:
+
+```sh
+python -m pip install -e "cli/python[dev]" -r integrations/agent-plugin-core/requirements-dev.txt
+pnpm --dir cli/node install --frozen-lockfile
+```
+
+From the repository root:
+
+```sh
+make test-quick-loopback PYTHON=python QUICK_LOOPBACK_ARTIFACTS=/tmp/mem0-loopback-before
+```
+
+The aggregate target attempts all five suites and exits nonzero if any fails.
+Console failures include the relevant subprocess output; each suite also writes
+a JUnit XML report to the requested artifact directory. Use different directories
+for before/after evidence or concurrent runs. The Node suite builds and packs the
+CLI, then exercises it outside the source tree so missing published assets cannot
+be hidden by repository files. The server suite builds a dedicated test image and
+runs without network access or production data mounts; its first image build
+requires dependency downloads.
+
+Run only the affected boundary while iterating:
+
+```sh
+make test-quick-loopback-python QUICK_LOOPBACK_PYTEST_ARGS="-k all_loopback_failures"
+make test-quick-loopback-node QUICK_LOOPBACK_VITEST_ARGS="-t C01"
+make test-quick-loopback-plugin QUICK_LOOPBACK_PYTEST_ARGS="-k p05"
+make test-quick-loopback-server QUICK_LOOPBACK_PYTEST_ARGS="-k missing_uuid"
+make test-quick-loopback-dashboard
+```
+
+Use the same Python environment for these commands, or pass `PYTHON` explicitly.
+Preserve the initial failing report, make the smallest root-cause fix, and rerun
+the same selector. Then run the affected package's full tests and its existing
+lint, typecheck, and build checks. A green focused lane is not a substitute for
+those regression gates or for live-provider/browser acceptance where required.
+Existing opt-in plugin live-service checks remain separate; see
+`integrations/agent-plugin-core/README.md` in the repository.
+
+---
+
 ## TypeScript SDK (`mem0-ts/`)
 
 We use [`pnpm`](https://pnpm.io/) (v10+) for all TypeScript packages. **Do NOT use

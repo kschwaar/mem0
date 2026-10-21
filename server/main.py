@@ -539,7 +539,12 @@ def get_all_memories(
 def get_memory(memory_id: str, _auth=Depends(verify_auth)):
     """Retrieve a specific memory by ID."""
     try:
-        return get_memory_instance().get(memory_id)
+        memory = get_memory_instance().get(memory_id)
+        if memory is None:
+            raise HTTPException(status_code=404, detail=f"Memory with id {memory_id} not found")
+        return memory
+    except HTTPException:
+        raise
     except Exception:
         raise upstream_error()
 

@@ -548,14 +548,23 @@ def cmd_delete(
     if is_agent_mode():
         output = "agent"
     if dry_run:
-        # Fetch and display what would be deleted
         try:
             mem = backend.get(memory_id)
         except Exception as e:
             print_error(err_console, str(e))
             raise typer.Exit(1) from None
-        format_single_memory(console, mem, output)
-        print_info(console, "No changes made (dry run).")
+        preview = {
+            "dry_run": True,
+            "id": memory_id,
+            "memory": mem.get("memory") or mem.get("text") or "",
+        }
+        if output == "agent":
+            format_agent_envelope(console, command="delete", data=preview)
+        elif output == "json":
+            format_json(console, preview)
+        elif output != "quiet":
+            format_single_memory(console, mem, output)
+            print_info(console, "No changes made (dry run).")
         return
 
     _start = _time.perf_counter()
@@ -601,9 +610,26 @@ def cmd_delete_all(
         if not force:
             print_error(err_console, "Destructive operation requires --force in agent mode.")
             raise typer.Exit(1)
+    if all_ and dry_run:
+        if output == "agent":
+            format_agent_envelope(
+                console,
+                command="delete-all",
+                data={"dry_run": True},
+                scope={"project": "true"},
+            )
+        elif output == "json":
+            format_json(
+                console,
+                {"dry_run": True, "scope": {"project": "true"}},
+            )
+        elif output != "quiet":
+            print_info(console, "Would delete all memories across the entire project.")
+            print_info(console, "No changes made (dry run).")
+        return
+
     if all_:
         # Project-wide wipe using wildcard entity IDs
-        # Note: --dry-run is ignored here because the API has no count-before-delete endpoint.
 
         if not force:
             confirm = typer.confirm(
@@ -645,20 +671,53 @@ def cmd_delete_all(
         return
 
     if dry_run:
-        # List matching memories and show count
+        # Count every page without retaining the full matching dataset.
+        count = 0
+        page = 1
+        page_size = 100
         try:
-            results = backend.list_memories(
-                user_id=user_id,
-                agent_id=agent_id,
-                app_id=app_id,
-                run_id=run_id,
-            )
+            while True:
+                results = backend.list_memories(
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    app_id=app_id,
+                    run_id=run_id,
+                    page=page,
+                    page_size=page_size,
+                )
+                count += len(results)
+                if len(results) < page_size:
+                    break
+                page += 1
         except Exception as e:
             print_error(err_console, str(e))
             raise typer.Exit(1) from None
-        count = len(results)
-        print_info(console, f"Would delete {count} memor{'y' if count == 1 else 'ies'}.")
-        print_info(console, "No changes made (dry run).")
+        scope = {
+            k: v
+            for k, v in {
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "app_id": app_id,
+                "run_id": run_id,
+            }.items()
+            if v
+        }
+        if output == "agent":
+            format_agent_envelope(
+                console,
+                command="delete-all",
+                data={"dry_run": True},
+                scope=scope or None,
+                count=count,
+            )
+        elif output == "json":
+            format_json(
+                console,
+                {"dry_run": True, "count": count, "scope": scope},
+            )
+        elif output != "quiet":
+            print_info(console, f"Would delete {count} memor{'y' if count == 1 else 'ies'}.")
+            print_info(console, "No changes made (dry run).")
         return
 
     if not force:
