@@ -1,79 +1,61 @@
-from types import SimpleNamespace
-
-import main
-
-
-class FakeMemory:
-    def __init__(self):
-        self.get_all_calls = []
-        self.search_calls = []
-        self.deleted = []
-
-    def get_all(self, **params):
-        self.get_all_calls.append(params)
-        return {"results": [{"id": "memory-1"}, {"id": "memory-2"}]}
-
-    def search(self, query, **params):
-        self.search_calls.append({"query": query, **params})
-        return {"results": []}
-
-    def delete(self, memory_id):
-        self.deleted.append(memory_id)
-
-
-def install_fake_memory(monkeypatch):
-    memory = FakeMemory()
-    monkeypatch.setattr(main, "get_memory_instance", lambda: memory)
-    return memory
+MEMORIES = [
+    {
+        "id": "memory-1",
+        "memory": "favorite color is blue",
+        "user_id": "user-1",
+        "app_id": "app-1",
+    },
+    {
+        "id": "memory-2",
+        "memory": "favorite color is blue",
+        "user_id": "user-1",
+        "app_id": "app-2",
+    },
+    {
+        "id": "memory-3",
+        "memory": "favorite color is blue",
+        "user_id": "user-2",
+        "app_id": "app-1",
+    },
+]
 
 
-def test_list_memories_passes_app_id_as_top_level_filter(monkeypatch):
-    memory = install_fake_memory(monkeypatch)
+def test_list_memories_are_scoped_to_user_and_app(native_http):
+    response = native_http(
+        [{"method": "GET", "path": "/memories?user_id=user-1&app_id=app-1"}],
+        memories=MEMORIES,
+    )[0]
 
-    response = main.get_all_memories(
-        SimpleNamespace(state=SimpleNamespace(auth_type="admin_api_key")),
-        user_id="user-1",
-        app_id="app-1",
-        top_k=None,
-        show_expired=False,
-        _auth=SimpleNamespace(role="admin"),
+    assert response["status"] == 200, response
+    assert [memory["id"] for memory in response["body"]["results"]] == ["memory-1"]
+
+
+def test_search_memories_are_scoped_to_user_and_app(native_http):
+    response = native_http(
+        [
+            {
+                "method": "POST",
+                "path": "/search",
+                "json": {"query": "favorite color", "user_id": "user-1", "app_id": "app-1"},
+            }
+        ],
+        memories=MEMORIES,
+    )[0]
+
+    assert response["status"] == 200, response
+    assert [memory["id"] for memory in response["body"]["results"]] == ["memory-1"]
+
+
+def test_delete_memories_preserves_other_apps_and_users(native_http):
+    responses = native_http(
+        [
+            {"method": "DELETE", "path": "/memories?user_id=user-1&app_id=app-1"},
+            {"method": "GET", "path": "/memories?user_id=user-1"},
+            {"method": "GET", "path": "/memories?app_id=app-1"},
+        ],
+        memories=MEMORIES,
     )
 
-    assert response == {"results": [{"id": "memory-1"}, {"id": "memory-2"}]}
-    assert memory.get_all_calls == [
-        {"filters": {"user_id": "user-1", "app_id": "app-1"}, "show_expired": False}
-    ]
-
-
-def test_deprecated_search_app_id_remains_a_top_level_filter(monkeypatch):
-    memory = install_fake_memory(monkeypatch)
-
-    response = main.search_memories(
-        main.SearchRequest(query="local memory", user_id="user-1", app_id="app-1"),
-        _auth=SimpleNamespace(role="admin"),
-    )
-
-    assert response == {"results": []}
-    assert memory.search_calls == [
-        {"query": "local memory", "filters": {"user_id": "user-1", "app_id": "app-1"}}
-    ]
-
-
-def test_delete_memories_lists_by_top_level_app_id_before_deleting(monkeypatch):
-    memory = install_fake_memory(monkeypatch)
-
-    response = main.delete_all_memories(
-        user_id="user-1",
-        app_id="app-1",
-        _auth=SimpleNamespace(role="admin"),
-    )
-
-    assert response.message == "All relevant memories deleted"
-    assert memory.get_all_calls == [
-        {
-            "filters": {"user_id": "user-1", "app_id": "app-1"},
-            "top_k": main.ALL_MEMORIES_LIMIT,
-            "show_expired": True,
-        }
-    ]
-    assert memory.deleted == ["memory-1", "memory-2"]
+    assert responses[0]["status"] == 200, responses[0]
+    assert [memory["id"] for memory in responses[1]["body"]["results"]] == ["memory-2"]
+    assert [memory["id"] for memory in responses[2]["body"]["results"]] == ["memory-3"]

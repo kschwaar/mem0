@@ -13,6 +13,7 @@ from memory_core import (
     CODING_MEMORY_CATEGORY_NAMES,
     PLUGIN_VERSION,
     SEARCH_SCOPES,
+    MemorySearchResult,
     format_search_result,
     resolve_repo,
     search_memories,
@@ -112,10 +113,10 @@ def _validate_arguments(
     return query, top_k, category, scope, run_id
 
 
-def call_search_memories(arguments: Any, cwd: str | None = None) -> str:
+def call_search_memories(arguments: Any, cwd: str | None = None) -> MemorySearchResult:
     query, top_k, category, scope, run_id = _validate_arguments(arguments)
     repo = resolve_repo(cwd or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
-    result = search_memories(
+    return search_memories(
         None,
         repo,
         None,
@@ -126,7 +127,6 @@ def call_search_memories(arguments: Any, cwd: str | None = None) -> str:
         run_id=run_id,
         operation="mcp-search",
     )
-    return format_search_result(result)
 
 
 def _workspace_cwd(params: dict[str, Any]) -> str | None:
@@ -195,8 +195,12 @@ def handle_request(message: Any) -> dict[str, Any] | None:
             result = _tool_response("Unknown Mem0 tool.", is_error=True)
         else:
             try:
+                search_result = call_search_memories(
+                    params.get("arguments"), _workspace_cwd(params)
+                )
                 result = _tool_response(
-                    call_search_memories(params.get("arguments"), _workspace_cwd(params))
+                    format_search_result(search_result),
+                    is_error=not search_result.succeeded,
                 )
             except ToolInputError as exc:
                 result = _tool_response(str(exc), is_error=True)

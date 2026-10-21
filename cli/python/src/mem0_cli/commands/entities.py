@@ -118,8 +118,28 @@ def cmd_entities_delete(
     scope_str = ", ".join(scope_parts)
 
     if dry_run:
-        print_info(console, f"Would delete entity {scope_str} and all its memories.")
-        print_info(console, "No changes made (dry run).")
+        scope = {
+            k: v
+            for k, v in {
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "app_id": app_id,
+                "run_id": run_id,
+            }.items()
+            if v
+        }
+        if output == "agent":
+            format_agent_envelope(
+                console,
+                command="entity delete",
+                data={"dry_run": True},
+                scope=scope or None,
+            )
+        elif output == "json":
+            format_json(console, {"dry_run": True, "scope": scope})
+        elif output != "quiet":
+            print_info(console, f"Would delete entity {scope_str} and all its memories.")
+            print_info(console, "No changes made (dry run).")
         return
 
     if not force:

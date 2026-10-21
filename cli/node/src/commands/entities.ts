@@ -114,8 +114,24 @@ export async function cmdEntitiesDelete(
 	const scope = scopeParts.join(", ");
 
 	if (opts.dryRun) {
-		printInfo(`Would delete entity ${scope} and all its memories.`);
-		printInfo("No changes made.");
+		const scopeIds = {
+			user_id: opts.userId,
+			agent_id: opts.agentId,
+			app_id: opts.appId,
+			run_id: opts.runId,
+		};
+		if (opts.output === "agent") {
+			formatAgentEnvelope({
+				command: "entity delete",
+				data: { dry_run: true },
+				scope: scopeIds,
+			});
+		} else if (opts.output === "json") {
+			formatJson({ dry_run: true, scope: scopeIds });
+		} else {
+			printInfo(`Would delete entity ${scope} and all its memories.`);
+			printInfo("No changes made.");
+		}
 		return;
 	}
 

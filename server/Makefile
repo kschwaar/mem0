@@ -1,4 +1,4 @@
-.PHONY: up local-up local-recover down clean logs seed wait-api wait-dashboard bootstrap health build run_local reset-admin-password prune-logs
+.PHONY: up local-up local-recover down clean logs seed wait-api wait-dashboard bootstrap health build run_local reset-admin-password prune-logs test-quick-loopback
 
 OUTPUT ?= text
 API_URL ?= http://localhost:8888
@@ -71,3 +71,20 @@ build:
 
 run_local:
 	docker run -p 8000:8000 -v $(shell pwd):/app mem0-api-server --env-file .env
+
+QUICK_LOOPBACK_BASE_IMAGE ?= mem0-server-quick-loopback-base
+QUICK_LOOPBACK_IMAGE ?= mem0-server-quick-loopback-test
+
+test-quick-loopback:
+	@test -n "$(QUICK_LOOPBACK_ARTIFACTS)" || (echo "QUICK_LOOPBACK_ARTIFACTS must be an absolute directory" && exit 2)
+	@case "$(QUICK_LOOPBACK_ARTIFACTS)" in /*) ;; *) echo "QUICK_LOOPBACK_ARTIFACTS must be an absolute directory" && exit 2 ;; esac
+	@mkdir -p "$(QUICK_LOOPBACK_ARTIFACTS)"
+	docker build --target dependencies -f dev.Dockerfile -t "$(QUICK_LOOPBACK_BASE_IMAGE)" ..
+	docker build --build-arg BASE_IMAGE="$(QUICK_LOOPBACK_BASE_IMAGE)" -f quick-loopback-test.Dockerfile -t "$(QUICK_LOOPBACK_IMAGE)" ..
+	docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+		--workdir /workspace/server \
+		--mount type=bind,src="$(QUICK_LOOPBACK_ARTIFACTS)",dst=/artifacts \
+		-e HOME=/tmp/home -e XDG_CONFIG_HOME=/tmp/home/.config -e XDG_CACHE_HOME=/tmp/home/.cache \
+		-e PYTHON_DOTENV_DISABLED=true -e AUTH_DISABLED=true -e JWT_SECRET=quick-loopback-test-secret \
+		-e MEM0_TELEMETRY=false -e OPENAI_API_KEY= -e ANTHROPIC_API_KEY= -e GOOGLE_API_KEY= \
+		"$(QUICK_LOOPBACK_IMAGE)" sh -c 'mkdir -p /tmp/home/.config /tmp/home/.cache /tmp/pytest-cache && exec python -m pytest tests/test_quick_loopback.py $(QUICK_LOOPBACK_PYTEST_ARGS) -q -o cache_dir=/tmp/pytest-cache --junitxml=/artifacts/quick-loopback.xml'

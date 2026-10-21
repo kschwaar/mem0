@@ -7,6 +7,7 @@ import time as _time
 from pathlib import Path
 
 import typer
+from httpx import HTTPStatusError
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import track
@@ -108,7 +109,7 @@ def cmd_import(
     output: str = "text",
 ) -> None:
     """Import memories from a JSON file."""
-    from mem0_cli.output import format_agent_envelope
+    from mem0_cli.output import format_agent_envelope, format_json_envelope
     from mem0_cli.state import is_agent_mode, set_current_command
 
     set_current_command("import")
@@ -126,6 +127,7 @@ def cmd_import(
 
     added = 0
     failed = 0
+    first_error: Exception | None = None
     _start = _time.perf_counter()
     for item in track(
         data, description=f"[{DIM_COLOR}]Importing memories...[/]", console=err_console
@@ -142,12 +144,29 @@ def cmd_import(
                 metadata=item.get("metadata"),
             )
             added += 1
-        except Exception:
+        except Exception as error:
+            if first_error is None:
+                first_error = error
             failed += 1
     _elapsed = _time.perf_counter() - _start
+    total_failure = added == 0 and failed > 0
+    error_message = "All memories failed to import."
+    if isinstance(first_error, HTTPStatusError):
+        error_message = f"Memory API request failed with HTTP {first_error.response.status_code}."
 
     if output in ("json", "agent"):
         scope = {k: v for k, v in {"user_id": user_id, "agent_id": agent_id}.items() if v}
+        if total_failure:
+            format_json_envelope(
+                console,
+                command="import",
+                data={"added": added, "failed": failed},
+                scope=scope or None,
+                duration_ms=int(_elapsed * 1000),
+                status="error",
+                error=error_message,
+            )
+            raise typer.Exit(1)
         format_agent_envelope(
             console,
             command="import",
@@ -157,6 +176,11 @@ def cmd_import(
         )
         return
 
-    print_success(err_console, f"Imported {added} memories ({_elapsed:.2f}s)")
+    if not total_failure:
+        print_success(err_console, f"Imported {added} memories ({_elapsed:.2f}s)")
     if failed:
-        print_error(err_console, f"{failed} memories failed to import.")
+        message = error_message if total_failure else f"{failed} memories failed to import."
+        print_error(err_console, message)
+    if total_failure:
+        raise typer.Exit(1)
+

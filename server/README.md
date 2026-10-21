@@ -107,6 +107,19 @@ Wire the command into cron or a systemd timer in production. The `created_at` co
 - OpenAPI docs: `http://localhost:8888/docs`
 - MCP endpoint: `http://localhost:8888/mcp`
 
+For native `GET /memories/{memory_id}`, a missing memory returns HTTP 404. A
+storage or provider failure remains HTTP 502; it is not reported as not found.
+
+The hosted MCP endpoint is stateless Streamable HTTP: send JSON-RPC requests
+with POST to `/mcp` or `/mcp/`. It does not open a server-initiated SSE stream;
+GET returns HTTP 405 with `Allow: POST` instead of leaving the request hanging.
+Clients do not need a session ID, and session DELETE is unsupported.
+
+Compose passes `DASHBOARD_URL` (default `http://localhost:3000`) to both the API
+and dashboard. Explicit loopback HTTP origins use a non-Secure refresh cookie
+for local login/refresh. HTTPS and non-loopback origins keep Secure cookies;
+set `DASHBOARD_URL` to the public HTTPS origin when using a reverse proxy.
+
 ## Local Memory Profile
 
 The default Docker Compose stack uses Postgres/pgvector. For a heavier local
@@ -146,6 +159,19 @@ docker compose --profile local-memory up --build
 
 This starts Qdrant on `localhost:6333` and Neo4j on `localhost:7475`/`7688`.
 HuggingFace model files are cached in the `huggingface_cache` Docker volume.
+
+An available model is not necessarily a loadable model: a local provider can
+reject extraction with HTTP 507 when its memory allowance is too small. Mem0
+reports that upstream failure as HTTP 502 (`provider_unavailable`); starting
+the provider alone does not establish inference readiness. Select a model that
+fits the workstation, then verify an inferred write and readback. To change an
+existing deployment without restarting it, an authenticated admin can POST
+`{"llm":{"config":{"model":"Ministral-3-8B-Instruct-2512-4bit"}}}` to
+`/configure`. This is an example installed 8B model, not a bundled dependency.
+The override persists in the application database and takes precedence over
+`MEM0_DEFAULT_LLM_MODEL` on restart; `GET /configure` shows the effective model.
+Do not change embedding models/dimensions against existing vectors as part of
+an extraction-model change.
 
 Selecting `MEM0_GRAPH_STORE_PROVIDER=neo4j` enables the SDK's relationship graph:
 canonical vector memories remain the source of truth, successful writes are

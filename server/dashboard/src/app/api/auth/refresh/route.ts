@@ -2,29 +2,14 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { AUTH_ENDPOINTS } from "@/utils/api-endpoints";
 import { getServerApiUrl } from "@/lib/server-api-url";
+import { refreshCookieOptions } from "@/lib/refresh-cookie-options.mjs";
 
 const COOKIE_NAME = "mem0_refresh_token";
 
-function shouldUseSecureCookie() {
-  const dashboardUrl = process.env.DASHBOARD_URL;
-  if (!dashboardUrl) {
-    return process.env.NODE_ENV === "production";
-  }
-
-  try {
-    return new URL(dashboardUrl).protocol === "https:";
-  } catch {
-    return process.env.NODE_ENV === "production";
-  }
-}
-
-const COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: shouldUseSecureCookie(),
-  sameSite: "lax" as const,
-  path: "/",
-  maxAge: 30 * 24 * 60 * 60, // 30 days
-};
+const COOKIE_OPTIONS = refreshCookieOptions(
+  process.env.DASHBOARD_URL,
+  process.env.NODE_ENV,
+);
 
 export async function POST() {
   const cookieStore = await cookies();
@@ -42,7 +27,7 @@ export async function POST() {
 
   if (!res.ok) {
     // Refresh token is invalid — clear cookie
-    cookieStore.delete(COOKIE_NAME);
+    cookieStore.set(COOKIE_NAME, "", { ...COOKIE_OPTIONS, maxAge: 0 });
     return NextResponse.json({ error: "Refresh failed" }, { status: 401 });
   }
 
@@ -70,6 +55,6 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE() {
   const cookieStore = await cookies();
-  cookieStore.delete(COOKIE_NAME);
+  cookieStore.set(COOKIE_NAME, "", { ...COOKIE_OPTIONS, maxAge: 0 });
   return NextResponse.json({ ok: true });
 }

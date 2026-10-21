@@ -166,9 +166,21 @@ mem0 delete --all --user-id alice --force
 # Delete all memories project-wide
 mem0 delete --all --project --force
 
-# Preview what would be deleted
+# Text preview
 mem0 delete --all --user-id alice --dry-run
+
+# JSON previews
+mem0 --json delete <memory-id> --dry-run
+mem0 --json delete --all --project --dry-run --force
+mem0 --json delete --entity --user-id alice --dry-run --force
 ```
+
+`--dry-run` does not issue a deletion request, including for project-wide scope.
+Global `--json` returns a success envelope with the preview. Scoped `--all`
+previews include a count; project-wide previews report the action and project
+scope without reading records or claiming a total count. `--output json` returns
+raw JSON preview data. Entity previews identify their target scope without
+claiming a count for cascading memories.
 
 | Flag | Description |
 |------|-------------|
@@ -187,6 +199,13 @@ mem0 import data.json --user-id alice
 ```
 
 The file should be a JSON array where each item has a `memory` (or `text` or `content`) field and optional `user_id`, `agent_id`, and `metadata` fields.
+
+For machine-readable output, use `mem0 --json import data.json` or
+`mem0 import data.json --output json`. Both write one JSON document to stdout
+without progress text. If no row is imported and at least one fails, the
+command reports an error and exits non-zero in text and JSON modes. Partial
+imports retain success status and exit code while reporting both `added` and
+`failed` counts. An empty array is a successful no-op.
 
 ### `mem0 config`
 

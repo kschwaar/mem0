@@ -193,6 +193,13 @@ mem0 delete --all --user-id alice --dry-run
 | `--dry-run` | Preview without deleting |
 | `--force` | Skip confirmation prompt |
 
+With `--json`, dry-run previews return the normal success envelope and include
+`data.dry_run: true`. A single-ID preview includes the selected ID and memory.
+Scoped `--all` previews include the matching count and requested scope.
+Project-wide and entity previews describe the action and scope without
+enumerating memories or reporting a count. Text previews remain human-readable.
+Dry-run modes do not send deletion requests.
+
 ### `mem0 import`
 
 Bulk import memories from a JSON file.
@@ -318,6 +325,13 @@ What agent mode does differently from `--output json`:
 - **Sanitized `data`**: only the fields an agent needs (id, memory, score, etc.) — no internal API noise
 - **No human output**: spinners, colors, and banners are suppressed entirely
 - **Errors as JSON**: errors go to stdout as `{"status": "error", "command": "...", "error": "..."}` with a non-zero exit code
+
+For `import`, a total failure (`added: 0` with one or more failed rows) returns
+an error envelope and a non-zero exit in JSON/agent mode. Text mode also exits
+non-zero. Partial imports retain the existing success policy, and an empty
+input remains a successful import.
+Errors expose an upstream HTTP status when available, not raw response details
+that could contain credentials or request data.
 
 Use `mem0 help --json` to get the full command tree as JSON — useful for agents that need to self-discover available commands.
 

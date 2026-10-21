@@ -875,28 +875,17 @@ program
 	.option("--json", "Output machine-readable JSON for LLM agents.", false)
 	.addHelpText("after", "\nExamples:\n  $ mem0 help\n  $ mem0 help --json")
 	.action((opts) => {
-		// opts.json is set when `mem0 help --json` is used (subcommand flag).
-		// program.opts().json/.agent is set when a root global flag was used first.
+		// Keep source execution pointed at the shared spec, and load its copy
+		// beside the built entrypoint in the published package.
 		if (opts.json || program.opts().json || program.opts().agent) {
-			// Load spec from parent directory
 			const __dirname = path.dirname(fileURLToPath(import.meta.url));
-			const specPath = path.join(__dirname, "..", "..", "cli-spec.json");
-			if (fs.existsSync(specPath)) {
-				const spec = JSON.parse(fs.readFileSync(specPath, "utf-8"));
-				console.log(JSON.stringify(spec, null, 2));
-			} else {
-				console.log(
-					JSON.stringify(
-						{
-							name: "mem0",
-							version: CLI_VERSION,
-							description: "The Memory Layer for AI Agents",
-						},
-						null,
-						2,
-					),
-				);
-			}
+			const packagedSpecPath = path.join(__dirname, "cli-spec.json");
+			const sourceSpecPath = path.resolve(__dirname, "../../cli-spec.json");
+			const specPath = fs.existsSync(packagedSpecPath)
+				? packagedSpecPath
+				: sourceSpecPath;
+			const spec = JSON.parse(fs.readFileSync(specPath, "utf-8"));
+			console.log(JSON.stringify(spec, null, 2));
 		} else {
 			const { brand: b } = colors;
 			console.log(
